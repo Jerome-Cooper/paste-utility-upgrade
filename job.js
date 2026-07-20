@@ -861,10 +861,21 @@ export class Job {
 
             commands.push(
             `G0 X${x + this.lumen.tipXoffset} Y${y + this.lumen.tipYoffset}`,                 // Move over
-            `G0 Z${point.z}`,                       // Move z down
-            `G0 B${dispenseAbsPos}`,          // Extrude paste
-            `G0 B${retractionAbsPos}`,        // Retract a small amount
-            `G4 P${dwellMs}`,                 // Dwell and wait for paste to actually extrude
+            `G0 Z${point.z}`,                 // Move z down
+            "G91",                            // Put into relative mode
+            "M106 P2 S120",                   // Start the pump at half power
+            "G0 Z-.5",                        // Come up .5mm
+            "M906 B 1000",                    // Set the extruder motor current high
+            `G0 -B${dispenseDeg} F40000`,     // Extrude paste
+            `G0 B${retractionDeg}`,           // Retract a small amount
+            "M906 B 200",                     // Set the extruder motor current back down
+            "G0 Z.3",                         // Come down .3mm
+            "M107 P2",                        // Turn off the vacuum pump
+            "G0 Z-.5",                        // Come up .5mm
+            "G0 Z.3",                         // Come down .3mm
+            "G0 Z-.5",                        // Come up .5mm
+            "G0 Z.3",                         // Come down .3mm
+            "G90",                            // Put into absolute mode
             "G0 Z31.5",                       // Move safe z
             );
 
@@ -897,6 +908,10 @@ export class Job {
             console.log(this.toast.receivedInput)
 
             if(this.toast.toastObject.style.display == "none"){
+                await this.lumen.serial.send(["G90"]);
+                await this.lumen.serial.send(["M906 B 200"]);
+                await this.lumen.serial.send(["M107 P2"]);
+                await this.lumen.serial.send(["M107 P3"]);
                 await this.lumen.serial.send(["G0 Z31.5"]);
                 await this.lumen.serial.send(["G0 X5 Y5"]);
                 return;
