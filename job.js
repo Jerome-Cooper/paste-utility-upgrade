@@ -868,7 +868,7 @@ export class Job {
             "M906 B 1000",                    // Set the extruder motor current high
             `G0 B-${dwellMs} F4000`,                  // Extrude paste
             `G0 B4`,                          // Retract a small amount
-            `G4 P${dwellMs}`
+            `G4 P${dwellMs}`,
             //"M906 B 200",                     // Set the extruder motor current back down
             "G0 Z.3",                         // Come down .3mm
             "M107 P2",                        // Turn off the vacuum pump
@@ -913,7 +913,7 @@ export class Job {
                 await this.lumen.serial.send(["M906 B 200"]);
                 await this.lumen.serial.send(["M107 P2"]);
                 await this.lumen.serial.send(["M107 P3"]);
-                await this.lumen.serial.send(["G0 Z31.5"]);
+                await this.lumen.serial.send(["G0 Z31.5 F35000"]);
                 await this.lumen.serial.send(["G0 X5 Y5"]);
                 return;
             }
