@@ -860,15 +860,16 @@ export class Job {
 
 
             commands.push(
-            `G0 X${x + this.lumen.tipXoffset} Y${y + this.lumen.tipYoffset}`,                 // Move over
+            `G0 X${x + this.lumen.tipXoffset} Y${y + this.lumen.tipYoffset} F35000`,                 // Move over
             `G0 Z${point.z}`,                 // Move z down
             "G91",                            // Put into relative mode
             "M106 P2 S120",                   // Start the pump at half power
             "G0 Z-.5",                        // Come up .5mm
             "M906 B 1000",                    // Set the extruder motor current high
-            `G0 -B${dispenseDeg} F40000`,     // Extrude paste
-            `G0 B${retractionDeg}`,           // Retract a small amount
-            "M906 B 200",                     // Set the extruder motor current back down
+            `G0 B-${dwellMs} F4000`,                  // Extrude paste
+            `G0 B4`,                          // Retract a small amount
+            `G4 P${dwellMs}`
+            //"M906 B 200",                     // Set the extruder motor current back down
             "G0 Z.3",                         // Come down .3mm
             "M107 P2",                        // Turn off the vacuum pump
             "G0 Z-.5",                        // Come up .5mm
@@ -876,7 +877,7 @@ export class Job {
             "G0 Z-.5",                        // Come up .5mm
             "G0 Z.3",                         // Come down .3mm
             "G90",                            // Put into absolute mode
-            "G0 Z31.5",                       // Move safe z
+            "G0 Z31.5 F35000",                // Move safe z
             );
 
             currentB = retractionAbsPos;
