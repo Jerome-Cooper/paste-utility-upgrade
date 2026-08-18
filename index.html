@@ -26,6 +26,7 @@
     <a href="help.html"><button id="helpButton" style="background-color:gray;height:40px;padding:10px;">Docs</button></a>
     <select id="camera-select"></select>
     <button id="connect" type="button">Connect</button>
+    <button id="disconnect" type="button">Disconnect</button>
   </div>
 
   <div id="main-app">
@@ -70,19 +71,23 @@
         </div>
 
         <div class="settings-section">
-          <h2>Job Settings</h2>
+          <h2>Extruder Settings</h2>
           <div class="settings-row">
             <div class="setting-item">
               <label for="jobDispenseDeg">Dispense Degrees:</label>
               <input type="number" id="jobDispenseDeg" min="1" max="300" value="9" />
             </div>
             <div class="setting-item">
-              <label for="jobRetractionDeg">Retraction Degrees:</label>
-              <input type="number" id="jobRetractionDeg" min="1" max="200" value="5" />
+              <label for="jobMotionSpeed">Motion Speed (mm/min):</label>
+              <input type="number" id="jobMotionSpeed" min="1" max="50000" value="35000" />
             </div>
             <div class="setting-item">
-              <label for="jobDwellMs">Dwell Milliseconds:</label>
-              <input type="number" id="jobDwellMs" min="0" max="5000" value="100" />
+              <label for="jobExtruderSpeed">Extruder Speed (mm/min):</label>
+              <input type="number" id="jobExtruderSpeed" min="1" max="50000" value="4000" />
+            </div>
+            <div class="setting-item">
+              <label for="jobVacuumPressure">Vacuum Pressure: <span id="jobVacuumPressureValue">120</span></label>
+              <input type="range" id="jobVacuumPressure" min="0" max="255" value="120" step="1" />
             </div>
           </div>
           <div class="settings-row" style="margin-top: 15px; justify-content: space-around;">
@@ -101,6 +106,32 @@
                 <input type="checkbox" id="jobInvertDispense" style="margin: 0;" />
                 <span>Invert Dispense</span>
               </label>
+            </div>
+            <div class="setting-item">
+              <button class="goldenrod-button" id="purgeAuger" type="button">Purge Auger</button>
+            </div>
+          </div>
+          <div class="settings-row" style="margin-top: 15px; justify-content: space-around;">
+            <div class="setting-item">
+              <label>X Offset: <span id="x-offset-value">0.0mm</span></label>
+              <div class="offset-tool">
+                <button id="x-offset-down" class="goldenrod-button">-</button>
+                <button id="x-offset-up" class="goldenrod-button">+</button>
+              </div>
+            </div>
+            <div class="setting-item">
+              <label>Y Offset: <span id="y-offset-value">0.0mm</span></label>
+              <div class="offset-tool">
+                <button id="y-offset-down" class="goldenrod-button">-</button>
+                <button id="y-offset-up" class="goldenrod-button">+</button>
+              </div>
+            </div>
+            <div class="setting-item">
+              <label>Z Offset: <span id="z-offset-value">0.0mm</span></label>
+              <div class="offset-tool">
+                <button id="z-offset-down" class="goldenrod-button">▼</button>
+                <button id="z-offset-up" class="goldenrod-button">▲</button>
+              </div>
             </div>
           </div>
         </div>
@@ -156,7 +187,6 @@
           </div>
           <div class="jog-row">
             <button class="goldenrod-button" id="extrude-btn">Extrude</button>
-            <button class="goldenrod-button" id="retract-btn">Retract</button>
           </div>
         </div>
         <div class="jog-slider-container">
@@ -168,18 +198,15 @@
             <option value="4">0.1mm</option>
           </datalist>
         </div>
-        
+
       </div>
 
       <div class="control-row" style="margin-top:15px;">
-        <button id="ring-lights-on">Ring Lights On</button>
-        <button id="ring-lights-off">Ring Lights Off</button>
+        <button id="ring-lights-toggle">Ring Lights: Off</button>
       </div>
 
       <div class="control-row">
-          
-        <button id="left-air-on">Left Air On</button>
-        <button id="left-air-off">Left Air Off</button>
+        <button id="left-air-toggle">Left Air: Off</button>
         <button id="left-vac">Left Vac</button>
       </div>
     

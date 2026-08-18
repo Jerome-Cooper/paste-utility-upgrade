@@ -47,11 +47,13 @@ export class Job {
         this.fiducials = [];
 
         this.dispenseDegrees = 30;
-        this.retractionDegrees = 1;
-        this.dwellMilliseconds = 100;
+        this.motionSpeed = 35000;
+        this.extruderSpeed = 4000;
+        this.vacuumPressure = 120;
         this.preGcode = "";
         this.postGcode = "";
         this.invertDispense = false;
+        this.isRunning = false;
         this.lumen = lumen;
         this.toast = toast;
 
@@ -424,7 +426,7 @@ export class Job {
 
         await this.lumen.serial.send(["G0 Z31.5"]);
 
-        zPos = parseFloat(zPos[2]) - 0.2;
+        zPos = parseFloat(zPos[2]) + 0.2;
 
         // save that position to every placement
         for(const placement of this.placements){
@@ -654,8 +656,9 @@ export class Job {
             });
 
             this.dispenseDegrees = data.dispenseDegrees || 30;
-            this.retractionDegrees = data.retractionDegrees || 1;
-            this.dwellMilliseconds = data.dwellMilliseconds || 100;
+            this.motionSpeed = data.motionSpeed || 35000;
+            this.extruderSpeed = data.extruderSpeed || 4000;
+            this.vacuumPressure = typeof data.vacuumPressure !== 'undefined' ? data.vacuumPressure : 120;
             this.preGcode = data.preGcode || "";
             this.postGcode = data.postGcode || "";
             this.invertDispense = data.invertDispense || false;
@@ -663,21 +666,32 @@ export class Job {
             // Set tip offsets if present
             if (typeof data.tipXoffset !== 'undefined') this.lumen.tipXoffset = data.tipXoffset;
             if (typeof data.tipYoffset !== 'undefined') this.lumen.tipYoffset = data.tipYoffset;
+            if (typeof data.zOffset !== 'undefined') this.lumen.zOffset = data.zOffset;
 
             // ui update
             const jobDispenseDeg = document.getElementById('jobDispenseDeg');
-            const jobRetractionDeg = document.getElementById('jobRetractionDeg');
-            const jobDwellMs = document.getElementById('jobDwellMs');
+            const jobMotionSpeed = document.getElementById('jobMotionSpeed');
+            const jobExtruderSpeed = document.getElementById('jobExtruderSpeed');
+            const jobVacuumPressure = document.getElementById('jobVacuumPressure');
+            const jobVacuumPressureValue = document.getElementById('jobVacuumPressureValue');
             const jobPreGcode = document.getElementById('jobPreGcode');
             const jobPostGcode = document.getElementById('jobPostGcode');
             const jobInvertDispense = document.getElementById('jobInvertDispense');
+            const xOffsetValue = document.getElementById('x-offset-value');
+            const yOffsetValue = document.getElementById('y-offset-value');
+            const zOffsetValue = document.getElementById('z-offset-value');
 
             if (jobDispenseDeg) jobDispenseDeg.value = this.dispenseDegrees;
-            if (jobRetractionDeg) jobRetractionDeg.value = this.retractionDegrees;
-            if (jobDwellMs) jobDwellMs.value = this.dwellMilliseconds;
+            if (jobMotionSpeed) jobMotionSpeed.value = this.motionSpeed;
+            if (jobExtruderSpeed) jobExtruderSpeed.value = this.extruderSpeed;
+            if (jobVacuumPressure) jobVacuumPressure.value = this.vacuumPressure;
+            if (jobVacuumPressureValue) jobVacuumPressureValue.textContent = this.vacuumPressure;
             if (jobPreGcode) jobPreGcode.value = this.preGcode;
             if (jobPostGcode) jobPostGcode.value = this.postGcode;
             if (jobInvertDispense) jobInvertDispense.checked = this.invertDispense;
+            if (xOffsetValue) xOffsetValue.textContent = `${this.lumen.tipXoffset.toFixed(1)}mm`;
+            if (yOffsetValue) yOffsetValue.textContent = `${this.lumen.tipYoffset.toFixed(1)}mm`;
+            if (zOffsetValue) zOffsetValue.textContent = `${this.lumen.zOffset.toFixed(1)}mm`;
 
             // Update the UI position list
             this.loadJobIntoPositionList();
@@ -827,25 +841,12 @@ export class Job {
             "G0 Z31.5"      // make sure we're clear of the board
         );
 
-        let currentB = 0;
-
-        console.log(this.positions);
-
-        //cast to floats
         const dispenseDeg = parseFloat(this.dispenseDegrees);
-        const retractionDeg = parseFloat(this.retractionDegrees);
-        const dwellMs = parseFloat(this.dwellMilliseconds);
+
+        // Positive B extrudes on this auger; invert direction if invertDispense is enabled
+        const dispenseSign = this.invertDispense ? -1 : 1;
 
         for(const point of this.placements) {
-
-            let dispenseAbsPos = currentB - dispenseDeg;
-            let retractionAbsPos = dispenseAbsPos + retractionDeg;
-
-            // Invert B-axis direction if invertDispense is enabled
-            if (this.invertDispense) {
-                dispenseAbsPos = currentB + dispenseDeg;
-                retractionAbsPos = dispenseAbsPos - retractionDeg;
-            }
 
             let x = point.x;
             let y = point.y;
@@ -858,32 +859,33 @@ export class Job {
                 y = point.calY;
             }
 
+            const z = point.z + this.lumen.zOffset;
 
             commands.push(
-            `G0 X${x + this.lumen.tipXoffset} Y${y + this.lumen.tipYoffset} F35000`,                 // Move over
-            `G0 Z${point.z}`,                 // Move z down
-            "G91",                            // Put into relative mode
-            "M106 P2 S120",                   // Start the pump at half power
-            "G0 Z-.5",                        // Come up .5mm
-            "M906 B 1000",                    // Set the extruder motor current high
-            `G0 B-${dwellMs} F4000`,                  // Extrude paste
-            `G0 B4`,                          // Retract a small amount
-            `G4 P${dwellMs}`,
-            //"M906 B 200",                     // Set the extruder motor current back down
-            "G0 Z.3",                         // Come down .3mm
-            "M107 P2",                        // Turn off the vacuum pump
-            "G0 Z-.5",                        // Come up .5mm
-            "G0 Z.3",                         // Come down .3mm
-            "G0 Z-.5",                        // Come up .5mm
-            "G0 Z.3",                         // Come down .3mm
-            "G90",                            // Put into absolute mode
-            "G0 Z31.5 F35000",                // Move safe z
+                `G0 X${x + this.lumen.tipXoffset} Y${y + this.lumen.tipYoffset} F${this.motionSpeed}`, // Move over
+                `G0 Z${z}`,                                    // Move z down
+                "G91",                                         // Relative mode
+                "M106 P2 S{VACUUM}",                            // Pump on (speed substituted live at send time)
+                "G0 Z-.5",                                      // Come up .5mm
+                "M906 B 1000",                                  // Extruder current high
+                `G0 B${dispenseSign * dispenseDeg} F${this.extruderSpeed}`, // Extrude paste
+                "G0 Z.3",                                       // Come down .3mm
             );
 
-            currentB = retractionAbsPos;
+            // Wiggle the tip up/down to help release paste stuck to the nozzle
+            for (let i = 0; i < 4; i++) {
+                commands.push("G0 Z-.5", "G0 Z.3");
+            }
+
+            commands.push(
+                "G90",                                 // Absolute mode
+                `G0 Z31.5 F${this.motionSpeed}`,       // Move to safe Z
+            );
         }
 
-        commands.push("G0 X5 Y5");
+        commands.push(`G0 X5 Y5 F${this.motionSpeed}`);
+        commands.push(`G0 F${this.motionSpeed}`);
+
 
         // add post-gcode commands
         if (this.postGcode && this.postGcode.trim()) {
@@ -897,6 +899,23 @@ export class Job {
 
     }
 
+    // Parks the head, kills both pumps, and drops the extruder current back down.
+    // Shared by every way a job run can end (finished, cancelled via the toast) so
+    // the board is always left in the same state instead of each path improvising.
+    async finishRun(){
+        this.isRunning = false;
+        this.toast.receivedInput = false;
+        this.toast.hide();
+
+        await this.lumen.serial.send(["G90"]);
+        await this.lumen.serial.send(["M906 B 200"]);
+        await this.lumen.serial.send(["M107 P2"]);
+        await this.lumen.serial.send(["M107 P3"]);
+        await this.lumen.serial.send(["G0 Z31.5 F10000"]);
+        await this.lumen.serial.send(["G0 X5 Y5"]);
+        await this.lumen.serial.send(["G0 F35000"]);
+    }
+
     // slices and executes a job
     async run(){
 
@@ -904,25 +923,39 @@ export class Job {
 
         this.toast.show("Running job. Close this to cancel.");
 
+        this.isRunning = true;
+
         for(const command of commands){
 
             console.log(this.toast.receivedInput)
 
             if(this.toast.toastObject.style.display == "none"){
-                await this.lumen.serial.send(["G90"]);
-                await this.lumen.serial.send(["M906 B 200"]);
-                await this.lumen.serial.send(["M107 P2"]);
-                await this.lumen.serial.send(["M107 P3"]);
-                await this.lumen.serial.send(["G0 Z31.5 F35000"]);
-                await this.lumen.serial.send(["G0 X5 Y5"]);
+                await this.finishRun();
                 return;
             }
 
-            await this.lumen.serial.send([command]);
+            // Substitute the current vacuum pressure at send time so the slider
+            // can retune the pump speed live while the job is running.
+            const resolvedCommand = command.replace("{VACUUM}", this.vacuumPressure);
+
+            const sendOk = await this.lumen.serial.send([resolvedCommand]);
+
+            // send() returns false (instead of throwing) when the port drops mid-job.
+            // Stop here rather than blasting through the rest of the commands, which
+            // would otherwise fire a "Cannot Write" prompt for every remaining line.
+            // The board is already unreachable, so skip the parking gcode - it would
+            // just fail the same way and spam another round of error modals.
+            if (!sendOk) {
+                console.warn("Job stopped: lost connection to the board.");
+                this.isRunning = false;
+                this.toast.receivedInput = false;
+                this.toast.hide();
+                return;
+            }
 
         }
 
-        this.toast.receivedInput = false;
+        await this.finishRun();
 
     }
 
@@ -950,13 +983,15 @@ export class Job {
                 searchY: f.searchY
             })),
             dispenseDegrees: this.dispenseDegrees,
-            retractionDegrees: this.retractionDegrees,
-            dwellMilliseconds: this.dwellMilliseconds,
+            motionSpeed: this.motionSpeed,
+            extruderSpeed: this.extruderSpeed,
+            vacuumPressure: this.vacuumPressure,
             preGcode: this.preGcode,
             postGcode: this.postGcode,
             invertDispense: this.invertDispense,
             tipXoffset: this.lumen.tipXoffset,
-            tipYoffset: this.lumen.tipYoffset
+            tipYoffset: this.lumen.tipYoffset,
+            zOffset: this.lumen.zOffset
         };
         return JSON.stringify(data, null, 2);
     }

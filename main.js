@@ -37,8 +37,10 @@ onOpenCVReady(cv => {
   
   // settings elements
   const jobDispenseDeg = document.getElementById('jobDispenseDeg');
-  const jobRetractionDeg = document.getElementById('jobRetractionDeg');
-  const jobDwellMs = document.getElementById('jobDwellMs');
+  const jobMotionSpeed = document.getElementById('jobMotionSpeed');
+  const jobExtruderSpeed = document.getElementById('jobExtruderSpeed');
+  const jobVacuumPressure = document.getElementById('jobVacuumPressure');
+  const jobVacuumPressureValue = document.getElementById('jobVacuumPressureValue');
   const jobPreGcode = document.getElementById('jobPreGcode');
   const jobPostGcode = document.getElementById('jobPostGcode');
   const jobInvertDispense = document.getElementById('jobInvertDispense');
@@ -50,17 +52,31 @@ onOpenCVReady(cv => {
     });
   }
 
-  if (jobRetractionDeg) {
-    jobRetractionDeg.addEventListener('change', (e) => {
-      console.log('Retraction degrees changed:', e.target.value);
-      currentJob.retractionDegrees = Number(e.target.value);
+  if (jobMotionSpeed) {
+    jobMotionSpeed.addEventListener('change', (e) => {
+      console.log('Motion speed changed:', e.target.value);
+      currentJob.motionSpeed = Number(e.target.value);
     });
   }
 
-  if (jobDwellMs) {
-    jobDwellMs.addEventListener('change', (e) => {
-      console.log('Dwell milliseconds changed:', e.target.value);
-      currentJob.dwellMilliseconds = Number(e.target.value);
+  if (jobExtruderSpeed) {
+    jobExtruderSpeed.addEventListener('change', (e) => {
+      console.log('Extruder speed changed:', e.target.value);
+      currentJob.extruderSpeed = Number(e.target.value);
+    });
+  }
+
+  if (jobVacuumPressure) {
+    jobVacuumPressure.addEventListener('input', (e) => {
+      const value = Number(e.target.value);
+      currentJob.vacuumPressure = value;
+      if (jobVacuumPressureValue) jobVacuumPressureValue.textContent = value;
+
+      // If a job is actively running, push the new speed to the pump immediately
+      // so the tip pressure can be tuned live instead of waiting for the next point.
+      if (currentJob.isRunning && serial.port?.writable) {
+        serial.send([`M106 P2 S${value}`]);
+      }
     });
   }
 
@@ -171,8 +187,9 @@ onOpenCVReady(cv => {
       try {
         // ensure we have the latest values from the UI
         if (jobDispenseDeg) currentJob.dispenseDegrees = Number(jobDispenseDeg.value);
-        if (jobRetractionDeg) currentJob.retractionDegrees = Number(jobRetractionDeg.value);
-        if (jobDwellMs) currentJob.dwellMilliseconds = Number(jobDwellMs.value);
+        if (jobMotionSpeed) currentJob.motionSpeed = Number(jobMotionSpeed.value);
+        if (jobExtruderSpeed) currentJob.extruderSpeed = Number(jobExtruderSpeed.value);
+        if (jobVacuumPressure) currentJob.vacuumPressure = Number(jobVacuumPressure.value);
         if (jobPreGcode) currentJob.preGcode = jobPreGcode.value;
         if (jobPostGcode) currentJob.postGcode = jobPostGcode.value;
         if (jobInvertDispense) currentJob.invertDispense = jobInvertDispense.checked;
@@ -239,6 +256,19 @@ onOpenCVReady(cv => {
     }
   });
 
+  document.getElementById("disconnect").addEventListener("click", async () => {
+    try {
+      await serial.disconnect();
+
+      if (isCameraRunning) {
+        videoManager.stopVideo(canvas);
+        isCameraRunning = false;
+      }
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  });
+
   processButton.addEventListener('click', () => {
     if (isCameraRunning) {
       lumen.jogToFiducial();
@@ -261,7 +291,11 @@ onOpenCVReady(cv => {
 
   document.getElementById("nozzleOffsetCal").addEventListener('click', async () => {
     await currentJob.performTipCalibration();
-    
+
+    // performTipCalibration sets tipXoffset/tipYoffset directly, so refresh the
+    // offset tool's on-screen values to match instead of leaving them stale.
+    document.getElementById("x-offset-value").textContent = `${lumen.tipXoffset.toFixed(1)}mm`;
+    document.getElementById("y-offset-value").textContent = `${lumen.tipYoffset.toFixed(1)}mm`;
   });
 
 
@@ -340,60 +374,101 @@ function getJogDistance(){
 
 document.getElementById("jog-yp").addEventListener("click", () => {
   let dist = getJogDistance();
-  serial.send(["G91", `G0 Y${dist}`, "G90"]);
+  serial.send(["G91", `G0 Y${dist} F${currentJob.motionSpeed}`, "G90"]);
 });
 
 document.getElementById("jog-ym").addEventListener("click", () => {
   let dist = getJogDistance();
-  serial.send(["G91", `G0 Y-${dist}`, "G90"]);
+  serial.send(["G91", `G0 Y-${dist} F${currentJob.motionSpeed}`, "G90"]);
 });
 
 document.getElementById("jog-xp").addEventListener("click", () => {
   let dist = getJogDistance();
-  serial.send(["G91", `G0 X${dist}`, "G90"]);
+  serial.send(["G91", `G0 X${dist} F${currentJob.motionSpeed}`, "G90"]);
 });
 
 document.getElementById("jog-xm").addEventListener("click", () => {
   let dist = getJogDistance();
-  serial.send(["G91", `G0 X-${dist}`, "G90"]);
+  serial.send(["G91", `G0 X-${dist} F${currentJob.motionSpeed}`, "G90"]);
 });
 
 document.getElementById("jog-zp").addEventListener("click", () => {
   let dist = getJogDistance();
-  serial.send(["G91", `G0 Z${dist}`, "G90"]);
+  serial.send(["G91", `G0 Z${dist} F${currentJob.motionSpeed}`, "G90"]);
 });
 
 document.getElementById("jog-zm").addEventListener("click", () => {
   let dist = getJogDistance();
-  serial.send(["G91", `G0 Z-${dist}`, "G90"]);
+  serial.send(["G91", `G0 Z-${dist} F${currentJob.motionSpeed}`, "G90"]);
 });
 
-// Extrude and Retract B motor
+// Extrude B motor
 const extrudeBtn = document.getElementById('extrude-btn');
-const retractBtn = document.getElementById('retract-btn');
 
 if (extrudeBtn) {
   extrudeBtn.addEventListener('click', () => {
-    // Invert direction if invertDispense is enabled
-    const direction = currentJob.invertDispense ? 2 : -2;
-    serial.send(["G91", `G0 B${direction}`, "G90"]); 
-  });
-}
-if (retractBtn) {
-  retractBtn.addEventListener('click', () => {
-    // Invert direction if invertDispense is enabled
-    const direction = currentJob.invertDispense ? -2 : 2;
-    serial.send(["G91", `G0 B${direction}`, "G90"]);
+    let dist = getJogDistance();
+    // Positive B extrudes on this auger; invert direction if invertDispense is enabled
+    const direction = currentJob.invertDispense ? -dist : dist;
+    // Pump on for the duration of the extrude move, then off
+    serial.send([`M106 P2 S${currentJob.vacuumPressure}`, "G91", `G0 B${direction} F${currentJob.extruderSpeed}`, "G90", "M107 P2"]);
   });
 }
 
-// Air control
-document.getElementById("left-air-on").addEventListener("click", () => {
-  serial.send(["M106", "M106 P1 S255"]);
+// Purge Auger: run the B axis a long way to clear/prime the auger, pump on throughout
+const purgeAugerBtn = document.getElementById('purgeAuger');
+if (purgeAugerBtn) {
+  purgeAugerBtn.addEventListener('click', () => {
+    serial.send([`M106 P2 S${currentJob.vacuumPressure}`, "G91", "G0 B200000 F100000", "G90", "M107 P2"]);
+  });
+}
+
+// Offset tuning: nudge the dispense position by 0.1mm and jog the physical tip to match.
+// Shared by the X/Y/Z offset tools in the Extruder Settings panel.
+const offsetStep = 0.1;
+
+function adjustOffset(lumenProperty, gcodeAxis, valueElementId, delta) {
+  lumen[lumenProperty] = Math.round((lumen[lumenProperty] + delta) * 10) / 10;
+  document.getElementById(valueElementId).textContent = `${lumen[lumenProperty].toFixed(1)}mm`;
+  serial.send(["G91", `G0 ${gcodeAxis}${delta} F${currentJob.motionSpeed}`, "G90"]);
+}
+
+document.getElementById("x-offset-up").addEventListener("click", () => {
+  adjustOffset("tipXoffset", "X", "x-offset-value", offsetStep);
 });
 
-document.getElementById("left-air-off").addEventListener("click", () => {
-  serial.send(["M107", "M107 P1"]);
+document.getElementById("x-offset-down").addEventListener("click", () => {
+  adjustOffset("tipXoffset", "X", "x-offset-value", -offsetStep);
+});
+
+document.getElementById("y-offset-up").addEventListener("click", () => {
+  adjustOffset("tipYoffset", "Y", "y-offset-value", offsetStep);
+});
+
+document.getElementById("y-offset-down").addEventListener("click", () => {
+  adjustOffset("tipYoffset", "Y", "y-offset-value", -offsetStep);
+});
+
+// This machine's Z is inverted from typical printer convention: a positive Z
+// gcode delta moves the tip DOWN toward the board, negative moves it UP (see
+// the dispense move comments in job.js slice()). So "up" sends a negative
+// delta and "down" sends a positive one, to match the on-screen button labels.
+document.getElementById("z-offset-up").addEventListener("click", () => {
+  adjustOffset("zOffset", "Z", "z-offset-value", -offsetStep);
+});
+
+document.getElementById("z-offset-down").addEventListener("click", () => {
+  adjustOffset("zOffset", "Z", "z-offset-value", offsetStep);
+});
+
+// Air control
+const leftAirToggle = document.getElementById("left-air-toggle");
+let leftAirOn = false;
+leftAirToggle.addEventListener("click", () => {
+  leftAirOn = !leftAirOn;
+  serial.send(leftAirOn ? ["M106", "M106 P1 S255"] : ["M107", "M107 P1"]);
+  leftAirToggle.textContent = `Left Air: ${leftAirOn ? 'On' : 'Off'}`;
+  leftAirToggle.classList.toggle('active', leftAirOn);
 });
 
 // Vacuum control
@@ -402,12 +477,13 @@ document.getElementById("left-vac").addEventListener("click", () => {
 });
 
 // Ring lights control
-document.getElementById("ring-lights-on").addEventListener("click", () => {
-  serial.send(["M150 P255 R255 U255 B255"]);
-});
-
-document.getElementById("ring-lights-off").addEventListener("click", () => {
-  serial.send(["M150 P0"]);
+const ringLightsToggle = document.getElementById("ring-lights-toggle");
+let ringLightsOn = false;
+ringLightsToggle.addEventListener("click", () => {
+  ringLightsOn = !ringLightsOn;
+  serial.send([ringLightsOn ? "M150 P255 R255 U255 B255" : "M150 P0"]);
+  ringLightsToggle.textContent = `Ring Lights: ${ringLightsOn ? 'On' : 'Off'}`;
+  ringLightsToggle.classList.toggle('active', ringLightsOn);
 });
 
 // Stepper control

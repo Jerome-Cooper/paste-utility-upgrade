@@ -983,14 +983,34 @@ select:focus {
   justify-content: center;
 }
 
-#left-air-on, #left-air-off, #left-vac, #disable-steppers,
-#ring-lights-on, #ring-lights-off, #home-x, #home-y, #home-z {
+#left-air-toggle, #left-vac, #disable-steppers,
+#ring-lights-toggle, #home-x, #home-y, #home-z, #disconnect {
   background-color: #6c757d;
 }
 
-#left-air-on:hover, #left-air-off:hover, #left-vac:hover, #disable-steppers:hover,
-#ring-lights-on:hover, #ring-lights-off:hover, #home-x:hover, #home-y:hover, #home-z:hover {
+#left-air-toggle:hover, #left-vac:hover, #disable-steppers:hover,
+#ring-lights-toggle:hover, #home-x:hover, #home-y:hover, #home-z:hover, #disconnect:hover {
   background-color: #5a6268;
+}
+
+#left-air-toggle.active, #ring-lights-toggle.active {
+  background-color: #2e7d32;
+}
+
+#left-air-toggle.active:hover, #ring-lights-toggle.active:hover {
+  background-color: #256428;
+}
+
+.offset-tool {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.offset-tool button {
+  padding: 0.4rem 0.9rem;
+  flex: 1;
 }
 
 .goldenrod-button {
@@ -1118,6 +1138,14 @@ select:focus {
 
 .setting-item input:hover {
   border-color: #999;
+}
+
+.setting-item input[type="range"] {
+  writing-mode: horizontal-tb;
+  height: auto;
+  padding: 0;
+  border: none;
+  accent-color: var(--button-bg);
 }
 
 .positions-section {

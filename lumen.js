@@ -4,6 +4,7 @@ export class Lumen {
         this.video = null;
         this.tipXoffset = 0;
         this.tipYoffset = 0;
+        this.zOffset = 0;
 
     }
 
