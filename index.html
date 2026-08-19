@@ -37,15 +37,11 @@
         <div class="import-section">
           <div class="button-row">
             <input type="file" id="jobFile" accept=".json" style="display: none;" />
-            <input type="file" id="pasteGerberFile" accept=".gbr" style="display: none;" />
-            <input type="file" id="maskGerberFile" accept=".gbr" style="display: none;" />
+            <input type="file" id="gerberFiles" accept=".zip,.gbr,.ger,.gtp,.gbp,.gts,.gbs,.pho,.art" multiple style="display: none;" />
             <button class="goldenrod-button" id="importJob" type="button">Import Job</button>
             OR
-            <button class="goldenrod-button" id="selectPasteGerber" type="button">Select Paste Gerber</button>
-            <span id="pasteGerberFilename"></span>
-            <button class="goldenrod-button" id="selectMaskGerber" type="button">Select Mask Gerber</button>
-            <span id="maskGerberFilename"></span>
-            <button class="goldenrod-button" id="loadGerbers" type="button">Load Gerbers</button>
+            <button class="goldenrod-button" id="importGerber" type="button">Import Gerber</button>
+            <span id="gerberImportStatus"></span>
           </div>
         </div>
         <div class="settings-container">
@@ -75,7 +71,7 @@
           <div class="settings-row">
             <div class="setting-item">
               <label for="jobDispenseDeg">Dispense Degrees:</label>
-              <input type="number" id="jobDispenseDeg" min="1" max="300" value="9" />
+              <input type="number" id="jobDispenseDeg" min="1" max="300" value="30" />
             </div>
             <div class="setting-item">
               <label for="jobMotionSpeed">Motion Speed (mm/min):</label>
@@ -83,11 +79,11 @@
             </div>
             <div class="setting-item">
               <label for="jobExtruderSpeed">Extruder Speed (mm/min):</label>
-              <input type="number" id="jobExtruderSpeed" min="1" max="50000" value="4000" />
+              <input type="number" id="jobExtruderSpeed" min="1" max="200000" value="100000" />
             </div>
             <div class="setting-item">
-              <label for="jobVacuumPressure">Vacuum Pressure: <span id="jobVacuumPressureValue">120</span></label>
-              <input type="range" id="jobVacuumPressure" min="0" max="255" value="120" step="1" />
+              <label for="jobVacuumPressure">Air Assist: <span id="jobVacuumPressureValue">100</span>%</label>
+              <input type="range" id="jobVacuumPressure" min="0" max="100" value="100" step="1" />
             </div>
           </div>
           <div class="settings-row" style="margin-top: 15px; justify-content: space-around;">

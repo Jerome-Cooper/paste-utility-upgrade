@@ -1,13 +1,17 @@
-import {parse} from '@tracespace/parser'
 import {fromTriangles, applyToPoint, applyToPoints} from 'transformation-matrix';
+import {importGerberSet, sortPadsRasterOrder, tagTightPitchPads, planPadDispense} from './gerberImport.js';
 
 class Point {
-    constructor(x, y, z) {
+    constructor(x, y, z, dispenseDegrees) {
 
         //these are the raw positions from the gerber import
         this.x = x;
         this.y = y;
         this.z = z;
+
+        // per-point dispense override (e.g. from gerber pad-size scaling / multi-dot
+        // patterns); null means "use the job's global Dispense Degrees setting"
+        this.dispenseDegrees = dispenseDegrees ?? null;
 
         // these are any calibrated positions as a result from fid cal
         this.calX = null;
@@ -48,8 +52,8 @@ export class Job {
 
         this.dispenseDegrees = 30;
         this.motionSpeed = 35000;
-        this.extruderSpeed = 4000;
-        this.vacuumPressure = 120;
+        this.extruderSpeed = 100000;
+        this.vacuumPressure = 100; // air assist, as a percentage (0-100)
         this.preGcode = "";
         this.postGcode = "";
         this.invertDispense = false;
@@ -172,159 +176,64 @@ export class Job {
 
     }
 
-    async parseGerber(fileInputId){
-        const fileInput = document.getElementById(fileInputId);
-        if (!fileInput || !fileInput.files[0]) {
-            console.error('No file selected');
-            return [];
-        }
+    // Imports a paste (+ optional mask) layer from whatever was selected in the
+    // gerber file input - either a single zip (typical KiCad/JLCPCB/EasyEDA fab
+    // output bundle) or several loose gerber files - auto-detecting which file
+    // is which from the Gerber X2 %TF.FileFunction% attribute (falling back to
+    // filename conventions for older exports that don't have it).
+    //
+    // Pads are classified from their real aperture geometry: elongated pads get
+    // a line of dots, large open pads (e.g. QFN thermal pads) get a grid, and
+    // pads sitting in a fine pitch row (TSOP/QFP-style) get a single dot that
+    // alternates position slightly to cut bridging risk. Each dot's dispense
+    // volume is scaled off a 30-degree-for-a-0402-pad baseline. See
+    // gerberImport.js for the tunable thresholds.
+    async loadGerberFiles(fileList){
+        const {pastePads, maskFlashes, warnings} = await importGerberSet(fileList);
 
-        const gerberData = await fileInput.files[0].text();
+        if (warnings.length) console.warn('Gerber import warnings:', warnings);
 
-        const syntaxTree = parse(gerberData)
+        const sortedPads = sortPadsRasterOrder(pastePads);
+        const taggedPads = tagTightPitchPads(sortedPads);
 
-        console.log(syntaxTree)
+        // Alternate the stagger direction while we're walking through a run of
+        // tight-pitch pads, resetting once we leave that run.
+        let staggerToggle = 1;
+        for (const pad of taggedPads){
+            const sign = pad.tightPitch ? staggerToggle : 0;
+            if (pad.tightPitch) staggerToggle *= -1; else staggerToggle = 1;
 
-        let positions = [];
-        let minX, minY, maxX, maxY;
-
-        // Divides by this factor to convert integer back to float digits
-        // 1000000 is the default (6 dec places)
-        let decimal_scalefactor = 1000000;
-        // Multiplies by this factor to convert units
-        // Defaults to 1 (mm)
-        let unit_scalefactor = 1;
-
-        let last_x = NaN;
-        let last_y = NaN;
-        // iterate through the syntax tree children looking for relevant items
-        // save the x and y values for elements of type 'graphic'
-        // set the unit conversion for elements of type 'units'
-        // set the decimal format for elements of type 'coordinateFormat'
-        for (const child of syntaxTree.children) {
-          if (child.type == 'units'){
-            if (child.units){
-              if (child.units === "mm"){
-                unit_scalefactor = 1; // Redundant
-              }else if (child.units === "in"){
-                console.log("Converting from inches");
-                // Inches to mm
-                unit_scalefactor = 25.4;
-              }else{
-                console.error("Unknown unit format: ", child.units);
-              }
-            }
-          }else if (child.type === 'coordinateFormat'){
-            if (child.format){
-              let dec_count = child.format[1];
-              console.log("Got coordinate format command, decimal places: ", dec_count);
-              decimal_scalefactor = Math.pow(10, dec_count);
-            }else{
-              console.log("Invalid coordinate");
-            }
-            if (child.mode != "absolute"){
-              alert("Invalid Gerber coordinate format: " + child.mode + "\nTry re-exporting with absolute coordinates");
-            }
-          }else if (child.type === 'graphic' && child.graphic === 'shape') {
-            let shape_x = child.coordinates.x;
-            let shape_y = child.coordinates.y;
-
-            // Validate the X and Y coordinates and use the last valid reference coordinate
-            // if one isn't available.
-            if (Number.isNaN(shape_x) || shape_x === undefined){
-              if (!Number.isNaN(last_x)){
-                shape_x = last_x;
-              }else{
-                console.error("No reference X for this point: ", child);
-              }
-            }
-
-            if (Number.isNaN(shape_y) || shape_y === undefined){
-              if (!Number.isNaN(last_y)){
-                shape_y = last_y;
-              }else{
-                console.error("No reference Y for this point: ", child);
-              }
-            }
-
-            positions.push({
-                x: shape_x/decimal_scalefactor*unit_scalefactor,
-                y: shape_y/decimal_scalefactor*unit_scalefactor
-            });
-
-            if (minX === undefined || child.coordinates.x/decimal_scalefactor*unit_scalefactor < minX) {
-              minX = child.coordinates.x/decimal_scalefactor*unit_scalefactor;
-            }
-            if (minY === undefined || child.coordinates.y/decimal_scalefactor*unit_scalefactor < minY) {
-              minY = child.coordinates.y/decimal_scalefactor*unit_scalefactor;
-            }
-            if (maxX === undefined || child.coordinates.x/decimal_scalefactor*unit_scalefactor > maxX) {
-              maxX = child.coordinates.x/decimal_scalefactor*unit_scalefactor;
-            }
-            if (maxY === undefined || child.coordinates.y/decimal_scalefactor*unit_scalefactor > maxY) {
-              maxY = child.coordinates.y/decimal_scalefactor*unit_scalefactor;
-            }
-
-            // Save the last valid X or Y coordinate (for Gerbers that rely on the last provided location)
-            if ( !(Number.isNaN(child.coordinates.x) || child.coordinates.x === undefined)){
-              last_x = child.coordinates.x;
-            }
-
-            if ( !(Number.isNaN(child.coordinates.y) || child.coordinates.y === undefined)){
-              last_y = child.coordinates.y;
-            }
-          }
-        }
-
-        console.log(positions);
-
-        return positions;
-    }
-
-
-    // ok this bad boi does a lot of stuff.
-
-    // then we figure out which are paste, and which are mask only (three of which are fids)
-    // then we have them click on fid1 on the canvas, and then have them jog to it
-    // then repeat with the other two
-    // then we have them move the tip to the z surface of the board, then we save that as z position for every placement.
-
-    async loadJobFromGerbers(){
-        // first we pull in the gerber points, scaled the hell down to actual mm.
-        const pastePoints = await this.parseGerber('pasteGerberFile');
-        let maskPoints = await this.parseGerber('maskGerberFile');
-
-        console.log("pastePoints: ", pastePoints)
-        console.log("maskPoints: ", maskPoints)
-
-        // filter out potential fid placements from mask
-        maskPoints = maskPoints.filter(element => !pastePoints.includes(element));
-
-        let onlyInMask = [];
-
-        for(const mask of maskPoints){
-            if(!pastePoints.includes(mask)){
-                onlyInMask.push(mask);
+            const dots = planPadDispense(pad, parseFloat(this.dispenseDegrees), sign);
+            for (const {dx, dy, dispenseDegrees} of dots){
+                this.placements.push(new Point(pad.x + dx, pad.y + dy, 31.5, dispenseDegrees));
             }
         }
 
-        console.log("onlyInMask: ", onlyInMask)
+        // Candidate fiducials: mask openings that don't correspond to a paste pad.
+        const onlyInMask = maskFlashes.filter(mask =>
+            !pastePads.some(pad => Math.abs(pad.x - mask.x) < 0.05 && Math.abs(pad.y - mask.y) < 0.05)
+        );
 
-
-        // Store points in this.placements
-        for(const pointData of pastePoints){
-            const newPoint = new Point(pointData.x, pointData.y, 31.5);
-            this.placements.push(newPoint);
-        }
-
-        // store all POTENTIAL fids in this.fiducials
         for(const maskData of onlyInMask){
             const newPoint = new Point(maskData.x, maskData.y, 31.5);
             this.fiducials.push(newPoint);
         }
 
-
+        // Draw immediately so the imported board is visible right away, before
+        // we even get to the (optional, and possibly interrupted) fiducial step.
         this.drawJobToCanvas();
+        this.loadJobIntoPositionList();
+
+        if (this.fiducials.length < 3) {
+            // Clicking asks returnClosestFidFromClickCoordinates() to match a candidate
+            // within a small pixel threshold - with fewer than 3 candidates on the board,
+            // some of those clicks can never match anything, so the toast-driven flow
+            // below would wait forever. Skip it without blocking the view of the board -
+            // paste points are already imported and visible; fiducials can be added
+            // manually with Capture New Position.
+            console.warn(`Only found ${this.fiducials.length} fiducial candidate(s) on the mask layer (need 3). Add fiducials manually if needed.`);
+            return {padCount: this.placements.length, fiducialCount: this.fiducials.length};
+        }
 
         // set up event listener for first fid selection
         // which just puts the closest point object directly into this.toast.receivedInput
@@ -365,7 +274,14 @@ export class Job {
 
         console.log("setting event listener");
 
-        this.jobCanvas.addEventListener("click", sendClickToToast.bind(this));
+        // .bind() returns a new function each time it's called, so addEventListener
+        // and removeEventListener must share this exact reference - passing
+        // sendClickToToast.bind(this) again to removeEventListener would silently
+        // fail to match, leaking this listener on the canvas forever and letting
+        // stray clicks (long after fid selection is done) keep setting
+        // this.toast.receivedInput out from under whatever toast shows up next.
+        const boundSendClickToToast = sendClickToToast.bind(this);
+        this.jobCanvas.addEventListener("click", boundSendClickToToast);
 
         // show the first toast asking them to click
         const fid1_object = await this.toast.show("Please click on FID1 in the display.");
@@ -377,7 +293,7 @@ export class Job {
         const fid3_object = await this.toast.show("Please click on FID3 in the display.");
 
         // cancel event listener for fid selection
-        this.jobCanvas.removeEventListener('click', sendClickToToast)
+        this.jobCanvas.removeEventListener('click', boundSendClickToToast)
 
         // delete all fids from this.fiducials other than the ones we just got
         this.fiducials = [fid1_object, fid2_object, fid3_object];
@@ -391,7 +307,7 @@ export class Job {
 
         this.drawJobToCanvas();
 
-
+        return {padCount: this.placements.length, fiducialCount: this.fiducials.length};
 
     }
 
@@ -639,7 +555,7 @@ export class Job {
             const data = JSON.parse(jsonString);
 
             this.placements = (data.placements || []).map(p => {
-                const point = new Point(p.x, p.y, p.z);
+                const point = new Point(p.x, p.y, p.z, p.dispenseDegrees);
                 point.calX = p.calX;
                 point.calY = p.calY;
                 point.canvasX = p.canvasX;
@@ -657,8 +573,8 @@ export class Job {
 
             this.dispenseDegrees = data.dispenseDegrees || 30;
             this.motionSpeed = data.motionSpeed || 35000;
-            this.extruderSpeed = data.extruderSpeed || 4000;
-            this.vacuumPressure = typeof data.vacuumPressure !== 'undefined' ? data.vacuumPressure : 120;
+            this.extruderSpeed = data.extruderSpeed || 100000;
+            this.vacuumPressure = typeof data.vacuumPressure !== 'undefined' ? data.vacuumPressure : 100;
             this.preGcode = data.preGcode || "";
             this.postGcode = data.postGcode || "";
             this.invertDispense = data.invertDispense || false;
@@ -841,8 +757,6 @@ export class Job {
             "G0 Z31.5"      // make sure we're clear of the board
         );
 
-        const dispenseDeg = parseFloat(this.dispenseDegrees);
-
         // Positive B extrudes on this auger; invert direction if invertDispense is enabled
         const dispenseSign = this.invertDispense ? -1 : 1;
 
@@ -860,6 +774,10 @@ export class Job {
             }
 
             const z = point.z + this.lumen.zOffset;
+
+            // Gerber-imported points may carry their own pad-size-scaled dispense
+            // amount; manually captured points fall back to the global setting.
+            const dispenseDeg = point.dispenseDegrees != null ? point.dispenseDegrees : parseFloat(this.dispenseDegrees);
 
             commands.push(
                 `G0 X${x + this.lumen.tipXoffset} Y${y + this.lumen.tipYoffset} F${this.motionSpeed}`, // Move over
@@ -934,9 +852,11 @@ export class Job {
                 return;
             }
 
-            // Substitute the current vacuum pressure at send time so the slider
-            // can retune the pump speed live while the job is running.
-            const resolvedCommand = command.replace("{VACUUM}", this.vacuumPressure);
+            // Substitute the current air assist level at send time so the slider
+            // can retune the pump speed live while the job is running. Stored as
+            // a 0-100 percentage; the firmware wants a 0-255 PWM value.
+            const vacuumPwm = Math.round(this.vacuumPressure / 100 * 255);
+            const resolvedCommand = command.replace("{VACUUM}", vacuumPwm);
 
             const sendOk = await this.lumen.serial.send([resolvedCommand]);
 
@@ -966,6 +886,7 @@ export class Job {
                 x: p.x,
                 y: p.y,
                 z: p.z,
+                dispenseDegrees: p.dispenseDegrees,
                 calX: p.calX,
                 calY: p.calY,
                 canvasX: p.canvasX,

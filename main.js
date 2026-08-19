@@ -68,14 +68,14 @@ onOpenCVReady(cv => {
 
   if (jobVacuumPressure) {
     jobVacuumPressure.addEventListener('input', (e) => {
-      const value = Number(e.target.value);
-      currentJob.vacuumPressure = value;
-      if (jobVacuumPressureValue) jobVacuumPressureValue.textContent = value;
+      const percent = Number(e.target.value);
+      currentJob.vacuumPressure = percent;
+      if (jobVacuumPressureValue) jobVacuumPressureValue.textContent = percent;
 
       // If a job is actively running, push the new speed to the pump immediately
-      // so the tip pressure can be tuned live instead of waiting for the next point.
+      // so the air assist level can be tuned live instead of waiting for the next point.
       if (currentJob.isRunning && serial.port?.writable) {
-        serial.send([`M106 P2 S${value}`]);
+        serial.send([`M106 P2 S${Math.round(percent / 100 * 255)}`]);
       }
     });
   }
@@ -127,57 +127,38 @@ onOpenCVReady(cv => {
     console.error('Import button or file input not found');
   }
 
-  // gerber import
-  const selectPasteGerberButton = document.getElementById('selectPasteGerber');
-  const selectMaskGerberButton = document.getElementById('selectMaskGerber');
-  const loadGerbersButton = document.getElementById('loadGerbers');
-  const pasteGerberFileInput = document.getElementById('pasteGerberFile');
-  const maskGerberFileInput = document.getElementById('maskGerberFile');
-  const pasteGerberFilename = document.getElementById('pasteGerberFilename');
-  const maskGerberFilename = document.getElementById('maskGerberFilename');
+  // gerber import - accepts either a single zip (fab output bundle) or several
+  // loose gerber files; paste/mask/etc. are auto-detected from file content
+  const importGerberButton = document.getElementById('importGerber');
+  const gerberFilesInput = document.getElementById('gerberFiles');
+  const gerberImportStatus = document.getElementById('gerberImportStatus');
 
-  if (selectPasteGerberButton && pasteGerberFileInput) {
-    selectPasteGerberButton.addEventListener('click', () => {
-      pasteGerberFileInput.click();
+  if (importGerberButton && gerberFilesInput) {
+    importGerberButton.addEventListener('click', () => {
+      gerberFilesInput.click();
     });
 
-    pasteGerberFileInput.addEventListener('change', (event) => {
-      const file = event.target.files[0];
-      if (file) {
-        pasteGerberFilename.textContent = file.name;
-      } else {
-        pasteGerberFilename.textContent = '';
-      }
-    });
-  }
+    gerberFilesInput.addEventListener('change', async (event) => {
+      const files = event.target.files;
+      if (!files || files.length === 0) return;
 
-  if (selectMaskGerberButton && maskGerberFileInput) {
-    selectMaskGerberButton.addEventListener('click', () => {
-      maskGerberFileInput.click();
-    });
+      if (gerberImportStatus) gerberImportStatus.textContent = 'Importing...';
 
-    maskGerberFileInput.addEventListener('change', (event) => {
-      const file = event.target.files[0];
-      if (file) {
-        maskGerberFilename.textContent = file.name;
-      } else {
-        maskGerberFilename.textContent = '';
-      }
-    });
-  }
-
-  if (loadGerbersButton) {
-    loadGerbersButton.addEventListener('click', async () => {
-      if (!pasteGerberFileInput.files[0] || !maskGerberFileInput.files[0]) {
-        alert('Please select both paste and mask gerber files first');
-        return;
-      }
       try {
-        await currentJob.loadJobFromGerbers();
+        const result = await currentJob.loadGerberFiles(files);
+        if (gerberImportStatus && result) {
+          gerberImportStatus.textContent = result.fiducialCount >= 3
+            ? `${result.padCount} points imported, ${result.fiducialCount} fiducials found`
+            : `${result.padCount} points imported (${result.fiducialCount}/3 fiducials found - add manually if needed)`;
+        }
       } catch (error) {
         console.error('Error loading gerbers:', error);
         alert('Error loading gerber files: ' + error.message);
+        if (gerberImportStatus) gerberImportStatus.textContent = '';
       }
+
+      // allow re-selecting the same file(s) later without needing a change first
+      gerberFilesInput.value = '';
     });
   }
 
@@ -411,7 +392,7 @@ if (extrudeBtn) {
     // Positive B extrudes on this auger; invert direction if invertDispense is enabled
     const direction = currentJob.invertDispense ? -dist : dist;
     // Pump on for the duration of the extrude move, then off
-    serial.send([`M106 P2 S${currentJob.vacuumPressure}`, "G91", `G0 B${direction} F${currentJob.extruderSpeed}`, "G90", "M107 P2"]);
+    serial.send([`M106 P2 S${Math.round(currentJob.vacuumPressure / 100 * 255)}`, "G91", `G0 B${direction} F${currentJob.extruderSpeed}`, "G90", "M107 P2"]);
   });
 }
 
@@ -419,7 +400,7 @@ if (extrudeBtn) {
 const purgeAugerBtn = document.getElementById('purgeAuger');
 if (purgeAugerBtn) {
   purgeAugerBtn.addEventListener('click', () => {
-    serial.send([`M106 P2 S${currentJob.vacuumPressure}`, "G91", "G0 B200000 F100000", "G90", "M107 P2"]);
+    serial.send([`M106 P2 S${Math.round(currentJob.vacuumPressure / 100 * 255)}`, "G91", "G0 B200000 F100000", "G90", "M107 P2"]);
   });
 }
 
