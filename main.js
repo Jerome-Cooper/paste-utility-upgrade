@@ -27,9 +27,24 @@ onOpenCVReady(cv => {
   const processButton = document.getElementById('process-button');
   
   videoManager.populateCameraList(cameraSelect);
-  
+
   let isCameraRunning = false;
-  
+
+  // Device labels are blank until getUserMedia grants permission (see the
+  // "connect" handler below, which repopulates the list once that happens),
+  // but the selector itself was never wired to actually switch the running
+  // stream when changed - picking a different camera did nothing until now.
+  cameraSelect.addEventListener('change', async () => {
+    if (!isCameraRunning) return;
+
+    try {
+      videoManager.stopVideo(canvas);
+      await videoManager.startVideo(cameraSelect.value, canvas);
+    } catch (err) {
+      alert('Error switching camera: ' + err.message);
+    }
+  });
+
   // job stuff
   const importJobButton = document.getElementById('importJob');
   const jobFileInput = document.getElementById('jobFile');
@@ -41,14 +56,18 @@ onOpenCVReady(cv => {
   const jobExtruderSpeed = document.getElementById('jobExtruderSpeed');
   const jobVacuumPressure = document.getElementById('jobVacuumPressure');
   const jobVacuumPressureValue = document.getElementById('jobVacuumPressureValue');
+  const jobMotorCurrent = document.getElementById('jobMotorCurrent');
+  const jobTravelHeight = document.getElementById('jobTravelHeight');
   const jobPreGcode = document.getElementById('jobPreGcode');
   const jobPostGcode = document.getElementById('jobPostGcode');
   const jobInvertDispense = document.getElementById('jobInvertDispense');
 
   if (jobDispenseDeg) {
-    jobDispenseDeg.addEventListener('change', (e) => {
-      console.log('Dispense degrees changed:', e.target.value);
+    jobDispenseDeg.addEventListener('input', (e) => {
       currentJob.dispenseDegrees = Number(e.target.value);
+      // Redraw so placement dots (sized by dispense degrees) reflect the new
+      // value immediately for every point still using the job-wide default.
+      currentJob.drawJobToCanvas();
     });
   }
 
@@ -77,6 +96,24 @@ onOpenCVReady(cv => {
       if (currentJob.isRunning && serial.port?.writable) {
         serial.send([`M106 P2 S${Math.round(percent / 100 * 255)}`]);
       }
+    });
+  }
+
+  if (jobMotorCurrent) {
+    jobMotorCurrent.addEventListener('input', (e) => {
+      currentJob.motorCurrent = Number(e.target.value);
+
+      // If a job is actively running, push the new current immediately so it
+      // can be tuned live instead of waiting for the next point.
+      if (currentJob.isRunning && serial.port?.writable) {
+        serial.send([`M906 B ${currentJob.motorCurrent}`]);
+      }
+    });
+  }
+
+  if (jobTravelHeight) {
+    jobTravelHeight.addEventListener('change', (e) => {
+      currentJob.travelHeight = Number(e.target.value);
     });
   }
 
@@ -171,6 +208,8 @@ onOpenCVReady(cv => {
         if (jobMotionSpeed) currentJob.motionSpeed = Number(jobMotionSpeed.value);
         if (jobExtruderSpeed) currentJob.extruderSpeed = Number(jobExtruderSpeed.value);
         if (jobVacuumPressure) currentJob.vacuumPressure = Number(jobVacuumPressure.value);
+        if (jobMotorCurrent) currentJob.motorCurrent = Number(jobMotorCurrent.value);
+        if (jobTravelHeight) currentJob.travelHeight = Number(jobTravelHeight.value);
         if (jobPreGcode) currentJob.preGcode = jobPreGcode.value;
         if (jobPostGcode) currentJob.postGcode = jobPostGcode.value;
         if (jobInvertDispense) currentJob.invertDispense = jobInvertDispense.checked;
@@ -226,7 +265,17 @@ onOpenCVReady(cv => {
         await serial.connect();
         await videoManager.startVideo(cameraSelect.value, canvas);
         isCameraRunning = true;
-        
+
+        // getUserMedia just granted camera permission, so device labels are
+        // now populated (they're blank before permission is granted) -
+        // refresh the list so the dropdown shows real camera names.
+        await videoManager.populateCameraList(cameraSelect);
+
+        // connect() just forced the ring light on (board boot behavior) -
+        // reflect that on the button instead of leaving it stuck on "Off".
+        syncRingLightsButton();
+
+
         // update button
         connectButton.textContent = 'Connected';
         connectButton.classList.add('connected');
@@ -409,6 +458,15 @@ if (purgeAugerBtn) {
 const offsetStep = 0.1;
 
 function adjustOffset(lumenProperty, gcodeAxis, valueElementId, delta) {
+  // Only keep the new value if the machine is actually connected to receive
+  // the matching jog - otherwise the stored offset (and the UI) would show a
+  // change that never happened on the physical machine, so it'd look "saved"
+  // while actually being stale/wrong the next time a job runs.
+  if (!serial.isConnected()) {
+    serial.send(["G91", `G0 ${gcodeAxis}${delta} F${currentJob.motionSpeed}`, "G90"]);
+    return;
+  }
+
   lumen[lumenProperty] = Math.round((lumen[lumenProperty] + delta) * 10) / 10;
   document.getElementById(valueElementId).textContent = `${lumen[lumenProperty].toFixed(1)}mm`;
   serial.send(["G91", `G0 ${gcodeAxis}${delta} F${currentJob.motionSpeed}`, "G90"]);
@@ -446,10 +504,29 @@ document.getElementById("z-offset-down").addEventListener("click", () => {
 const leftAirToggle = document.getElementById("left-air-toggle");
 let leftAirOn = false;
 leftAirToggle.addEventListener("click", () => {
+  if (!serial.isConnected()) {
+    serial.send(["M106"]); // triggers the same "Cannot Write" prompt as any other command
+    return;
+  }
   leftAirOn = !leftAirOn;
   serial.send(leftAirOn ? ["M106", "M106 P1 S255"] : ["M107", "M107 P1"]);
   leftAirToggle.textContent = `Left Air: ${leftAirOn ? 'On' : 'Off'}`;
   leftAirToggle.classList.toggle('active', leftAirOn);
+});
+
+const rightAirToggle = document.getElementById("right-air-toggle");
+let rightAirOn = false;
+rightAirToggle.addEventListener("click", () => {
+  if (!serial.isConnected()) {
+    serial.send(["M106 P2"]); // triggers the same "Cannot Write" prompt as any other command
+    return;
+  }
+  rightAirOn = !rightAirOn;
+  // P2 only - this is positive-pressure paste air-assist, not the vacuum
+  // setup (P3 is the vacuum pump's channel and doesn't apply here).
+  serial.send(rightAirOn ? ["M106 P2 S255"] : ["M107 P2"]);
+  rightAirToggle.textContent = `Right Air: ${rightAirOn ? 'On' : 'Off'}`;
+  rightAirToggle.classList.toggle('active', rightAirOn);
 });
 
 // Vacuum control
@@ -457,14 +534,30 @@ document.getElementById("left-vac").addEventListener("click", () => {
   serial.readLeftVac();
 });
 
-// Ring lights control
+document.getElementById("right-vac").addEventListener("click", () => {
+  serial.readRightVac();
+});
+
+// Ring lights control - serial.ringLightsOn (not a locally tracked bool) is
+// the source of truth, since the board also gets forced on at connect time
+// (see serialManager.connect()) independent of this button.
 const ringLightsToggle = document.getElementById("ring-lights-toggle");
-let ringLightsOn = false;
-ringLightsToggle.addEventListener("click", () => {
-  ringLightsOn = !ringLightsOn;
-  serial.send([ringLightsOn ? "M150 P255 R255 U255 B255" : "M150 P0"]);
-  ringLightsToggle.textContent = `Ring Lights: ${ringLightsOn ? 'On' : 'Off'}`;
-  ringLightsToggle.classList.toggle('active', ringLightsOn);
+
+function syncRingLightsButton() {
+  ringLightsToggle.textContent = `Ring Lights: ${serial.ringLightsOn ? 'On' : 'Off'}`;
+  ringLightsToggle.classList.toggle('active', serial.ringLightsOn);
+}
+
+ringLightsToggle.addEventListener("click", async () => {
+  if (!serial.isConnected()) {
+    serial.send(["M150 P0"]); // triggers the same "Cannot Write" prompt as any other command
+    return;
+  }
+  // Only flip the button once the board actually acknowledged the command -
+  // otherwise a dropped connection mid-send leaves the button lying about
+  // the real light state.
+  await serial.setRingLights(!serial.ringLightsOn);
+  syncRingLightsButton();
 });
 
 // Stepper control

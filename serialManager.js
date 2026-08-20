@@ -18,6 +18,12 @@ export class serialManager {
         this.timeoutID = undefined;
         this.okWaitResolve = null;
 
+        // Single source of truth for the ring light's on/off state - every
+        // place that can change it (the toggle button, the forced-on at
+        // connect time below) goes through setRingLights() so the UI can't
+        // drift from what was actually sent to the board.
+        this.ringLightsOn = false;
+
         this.bootCommands = [
             "G90",
             "M260 A112 B1 S1",
@@ -117,12 +123,29 @@ export class serialManager {
         document.querySelector("#connect").style.color = 'white';
         document.querySelector("#connect").innerHTML = 'Connected'; 
 
-        //send boot commands
-        this.send(this.bootCommands)
+        // send boot commands, then the ring light on - awaited and
+        // sequential, not fired concurrently: send() holds the port's
+        // writer lock for its whole duration, so a second send() started
+        // before the first finishes throws trying to get its own writer
+        // lock on an already-locked stream.
+        await this.send(this.bootCommands)
 
-        this.send(["M150 P255 R255 U255 B255"]);
+        // Board always boots with the ring light on - go through
+        // setRingLights() so this.ringLightsOn is confirmed true before
+        // connect() returns, and whatever's driving the toggle button can
+        // read the real state instead of assuming it's still off.
+        await this.setRingLights(true);
 
         return true
+    }
+
+    // Sends the ring light command and only updates the tracked state once
+    // the board actually acknowledges it - see the isConnected()/send()
+    // comment below for why updating local/UI state before that is wrong.
+    async setRingLights(on) {
+        const ok = await this.send([on ? "M150 P255 R255 U255 B255" : "M150 P0"]);
+        if (ok) this.ringLightsOn = on;
+        return ok;
     }
 
     async disconnect() {
@@ -239,6 +262,15 @@ export class serialManager {
         return new Promise(resolve => {
             this.okWaitResolve = resolve;
         });
+    }
+
+    // Whether there's an actually-writable port right now. Callers that mirror
+    // machine state into local variables/UI (offset nudges, LED/air toggles)
+    // should check this BEFORE updating that local state - otherwise the UI
+    // shows a value the machine never received, and it looks "saved" even
+    // though nothing happened.
+    isConnected() {
+        return !!this.port?.writable;
     }
 
     // Returns true if every command was written and acknowledged, false otherwise.

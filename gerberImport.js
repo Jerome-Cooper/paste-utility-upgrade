@@ -14,6 +14,18 @@ export const NOMINAL_0402_DISPENSE_DEGREES = 30
 export const MIN_DISPENSE_DEGREES = 3
 export const MAX_DISPENSE_DEGREES = 300
 
+// Real-world radius a dispensed dot's drawn indicator represents, scaled by
+// dispense degrees (see placementDotRadiusMm). Lives here rather than in
+// job.js (which also uses it, for the on-canvas dot) so planPadDispense's own
+// edge-clearance math (see the tight-pitch stagger block below) reasons about
+// the exact same dot size the UI shows, not a separate guess.
+export const PLACEMENT_DOT_REFERENCE_RADIUS_MM = 0.15
+
+export function placementDotRadiusMm(dispenseDegrees) {
+    const degrees = Math.max(dispenseDegrees, 0.01)
+    return PLACEMENT_DOT_REFERENCE_RADIUS_MM * Math.sqrt(degrees / NOMINAL_0402_DISPENSE_DEGREES)
+}
+
 // A pad is "elongated" (gets a line of dots instead of one dot) once its
 // length:width ratio and absolute length clear both of these. Lowered from an
 // earlier 1.2mm floor - IC gull-wing leads (SOIC/TSOP/QFP) are frequently
@@ -31,28 +43,86 @@ export const MIN_LINE_WIDTH_MM = 0.3
 // length to wet properly, not just "area equivalent" to a square pad.
 export const ELONGATED_VOLUME_MULTIPLIER = 1.3
 
-// Spacing between dots along a line/grid, and how far dots stay inset from
-// the pad's edge so paste doesn't get squeezed out past the pad.
+// Spacing between dots along a line, and how far dots stay inset from the
+// pad's edge so paste doesn't get squeezed out past the pad. 0.15 put the two
+// dots on a short-but-still-"line" pad (e.g. a SOT-23 leg, ~1.5mm long) right
+// at the tips - only 0.15mm from the edge, well inside where a dispensed
+// blob's own spread reaches past the copper. 0.3 keeps every line pattern's
+// dots noticeably more inset regardless of pad length, not just this board's
+// specific parts.
 export const DOT_PITCH_MM = 0.9
-export const PAD_EDGE_INSET_MM = 0.15
+export const PAD_EDGE_INSET_MM = 0.3
+
+// Grid dots (see POWER_PAD_MIN_AREA_MM2 below) use a tighter pitch than a
+// line does, for even coverage across a big open thermal/power pad. Each
+// dot's own share of the pad's total volume is no longer capped by splitting
+// a pad-wide ceiling across however many dots this pitch produces (see
+// totalDispenseDegreesForPad/clampDotDegrees) - so a tighter pitch here now
+// means more, still-appropriately-sized dots instead of more, thinner ones.
+export const GRID_DOT_PITCH_MM = 1.5
+
+// Grid pads use a bigger edge inset than PAD_EDGE_INSET_MM: a grid's outer
+// ring of dots sits close to the pad edge on two axes at once (not just one,
+// like a line pattern), so a spread-out deposit there is much more likely to
+// squeeze past the copper. Pulling the whole grid in tighter keeps every
+// dot's spread within the pad while leaving the per-dot volume (and dot
+// count) unchanged.
+export const GRID_EDGE_INSET_MM = 0.8
 
 // A pad this big (e.g. a QFN/thermal power pad) gets a grid of dots instead
 // of a single deposit.
 export const POWER_PAD_MIN_AREA_MM2 = 4.0
 
 // Pads whose nearest-neighbor edge-to-edge gap is under this are treated as
-// fine-pitch (TSOP/QFP-style, i.e. chip ICs sitting in a tight row) - they
-// still get their normal point/line/grid pattern (so a long thin pad still
-// gets a full line of dots, not just one), but every other pad in the row is
-// nudged sideways so consecutive deposits don't sit in one continuous line.
+// fine-pitch (TSOP/QFP/SOIC-style, i.e. gull-wing IC leads sitting in a tight
+// row). See planPadDispense() for what that changes.
 export const TIGHT_PITCH_GAP_MM = 0.35
-// Fraction of the pad's half-width to nudge alternating pads by (must stay
-// under 1.0 so the dot can't land past the pad edge).
+
+// A pad wider than this is never treated as a fine-pitch lead, no matter how
+// close its neighbor sits - real QFP/SOIC/TSOP leads are rarely wider than
+// ~0.6mm, so this comfortably covers them while excluding chunky power/tab
+// pads (1mm+) that can legitimately sit just as close to a neighbor.
+export const TIGHT_PITCH_MAX_PAD_WIDTH_MM = 1.0
+
+// A tight-pitch pad's single stagger dot is nudged along the pad's own long
+// axis by this fraction of the pad's own half-length, so it stays inside the
+// pad's copper. Kept under 1.0 so the dot can't land past the pad edge.
 export const STAGGER_OFFSET_FRACTION = 0.85
 
 // Pads within this Y distance of each other are considered the same "row"
 // when sorting into a deterministic raster (bottom-to-top, left-to-right).
 export const ROW_TOLERANCE_MM = 1.0
+
+// Fallback-only: on a board with no %TO.C% component attributes at all (see
+// groupPadsByComponent), pads this close - row/column-aligned edge-to-edge,
+// same test as tight-pitch neighbors but more permissive - are clustered
+// into one synthetic "component" purely from geometry, so the Job Positions
+// list still gets a collapsible per-part breakdown instead of one flat list
+// of every pad. Kept fairly tight rather than generous: single-linkage
+// clustering chains transitively (A-B close, B-C close => A and C cluster
+// together even if far apart), so a too-generous threshold on a densely
+// packed board can walk pad-to-pad across totally unrelated components and
+// merge a big chunk of the board into one group - measured on a real densely
+// packed board, 2.0mm did exactly that (a 40-pad connector legitimately
+// clustering alone at every threshold up to 1.5mm ballooned to 61 pads,
+// absorbing unrelated nearby parts, right as the threshold crossed 2.0mm).
+export const COMPONENT_CLUSTER_GAP_MM = 1.0
+
+// A "candidate fiducial" (a mask opening with no paste under it - see
+// findFiducialCandidates()) this close to a drilled hole is treated as the
+// same physical feature (a through-hole pin/via/mounting hole), not a
+// fiducial - real SMD fiducial marks are never drilled. Looser than the
+// paste/mask dedup tolerance since a drill file's coordinate format is
+// occasionally lower-precision than the gerber's.
+export const FIDUCIAL_DRILL_MATCH_TOLERANCE_MM = 0.08
+
+// Candidates this close together (same row/column) are grouped when checking
+// for a repeating array (see excludeRepeatingArrayCandidates()).
+export const REPEATING_ARRAY_GROUP_TOLERANCE_MM = 0.02
+
+// Consecutive gaps within this much of each other count as "the same
+// spacing" - i.e. an evenly-pitched row, like a connector or header.
+export const REPEATING_ARRAY_GAP_TOLERANCE_MM = 0.05
 // -----------------------------------------------------------------------------
 
 // Accepts a FileList/array. If it's a single .zip, unzips it (typical fab
@@ -102,6 +172,9 @@ function classifyFile(name, tree) {
         const isBottom = /,\s*Bot(tom)?\b/i.test(fileFunction)
         if (/FileFunction,\s*Paste/i.test(fileFunction)) return {kind: 'paste', side: isBottom ? 'bottom' : 'top'}
         if (/FileFunction,\s*Soldermask/i.test(fileFunction)) return {kind: 'mask', side: isBottom ? 'bottom' : 'top'}
+        // "Profile" is the board outline/edge-cuts layer; NP/P (non-plated/plated
+        // edge routing) is irrelevant to us, just the shape.
+        if (/FileFunction,\s*Profile/i.test(fileFunction)) return {kind: 'outline', side: null}
         return {kind: 'other', side: null}
     }
 
@@ -113,6 +186,10 @@ function classifyFile(name, tree) {
     }
     if (lower.includes('mask') || /\.gts$/.test(lower) || /\.gbs$/.test(lower)) {
         return {kind: 'mask', side: isBottom ? 'bottom' : 'top'}
+    }
+    if (/(^|[^a-z])(edge[._-]?cuts?|outline|profile|board[._-]?outline)([^a-z]|$)/.test(lower) ||
+        /\.(gm1|gko|gml)$/.test(lower)) {
+        return {kind: 'outline', side: null}
     }
 
     return {kind: 'other', side: null}
@@ -243,8 +320,26 @@ function padFromTool(x, y, tool, macros) {
     return {x, y, shape: 'unknown', xSize: 0.3, ySize: 0.3, diameter: 0.3, area: NOMINAL_0402_PAD_AREA_MM2}
 }
 
+// Extracts the component refdes a %TO.C,<refdes>*% (or its X1-comment
+// equivalent, `G04 #@! TO.C,<refdes>*`) attribute node carries, or 'TD' if
+// the node is the matching attribute-delete that clears it back to null.
+function refdesAttribute(child) {
+    const text = child.type === 'unimplemented' && typeof child.value === 'string' ? child.value
+        : child.type === 'comment' && typeof child.comment === 'string' ? child.comment
+        : null
+    if (!text) return null
+
+    const refdesMatch = /TO\.C,\s*([^*]+)/.exec(text)
+    if (refdesMatch) return {refdes: refdesMatch[1].trim()}
+    if (/(^|[^A-Z])TD\b/.test(text)) return {refdes: null}
+    return null
+}
+
 // Walks a parsed gerber tree, linking each flash (D03) to its active aperture
-// so we get real pad geometry, not just bare center points.
+// so we get real pad geometry, not just bare center points. Also tracks the
+// %TO.C,<refdes>% component attribute KiCad/Altium/EasyEDA write ahead of a
+// component's flashes (cleared by the matching TD), so each pad can be
+// grouped by the part it belongs to - see groupPadsByComponent().
 function extractPads(tree) {
     let decimalScale = 1000000
     let unitScale = 1
@@ -253,6 +348,7 @@ function extractPads(tree) {
     const tools = new Map()
     const macros = new Map()
     let activeTool = null
+    let activeRefdes = null
     const pads = []
 
     for (const child of tree.children) {
@@ -266,6 +362,9 @@ function extractPads(tree) {
             tools.set(child.code, child.shape)
         } else if (child.type === 'toolChange') {
             activeTool = tools.get(child.code) || null
+        } else if (child.type === 'comment' || child.type === 'unimplemented') {
+            const attr = refdesAttribute(child)
+            if (attr) activeRefdes = attr.refdes
         } else if (child.type === 'graphic') {
             // Gerber coordinates are modal across every graphic op, not just flashes -
             // e.g. Altium commonly writes a separate move (D02) that sets position,
@@ -287,7 +386,7 @@ function extractPads(tree) {
                 const x = resolvedX / decimalScale * unitScale
                 const y = resolvedY / decimalScale * unitScale
 
-                pads.push(padFromTool(x, y, activeTool, macros))
+                pads.push({...padFromTool(x, y, activeTool, macros), refdes: activeRefdes})
             }
         }
     }
@@ -295,8 +394,198 @@ function extractPads(tree) {
     return pads
 }
 
+// Tessellates a gerber arc segment (start -> end, sweeping around a center
+// given as start-relative I/J offsets, per spec) into short line segments,
+// since the canvas outline renderer just draws straight strokes.
+function tessellateArc(x1, y1, x2, y2, cx, cy, clockwise, stepsPerFullCircle = 32) {
+    const r = Math.hypot(x1 - cx, y1 - cy)
+    const a1 = Math.atan2(y1 - cy, x1 - cx)
+    let a2 = Math.atan2(y2 - cy, x2 - cx)
+
+    if (clockwise) {
+        if (a2 >= a1) a2 -= 2 * Math.PI
+    } else {
+        if (a2 <= a1) a2 += 2 * Math.PI
+    }
+
+    const steps = Math.max(1, Math.round(stepsPerFullCircle * Math.abs(a2 - a1) / (2 * Math.PI)))
+    const segments = []
+    let prevX = x1, prevY = y1
+    for (let i = 1; i <= steps; i++) {
+        const a = a1 + (a2 - a1) * (i / steps)
+        const x = cx + r * Math.cos(a)
+        const y = cy + r * Math.sin(a)
+        segments.push({x1: prevX, y1: prevY, x2: x, y2: y})
+        prevX = x; prevY = y
+    }
+    return segments
+}
+
+// Board outline layers (KiCad Edge_Cuts, Altium/Gerber "Profile") are drawn as
+// a collection of independent line/arc graphic shapes rather than flashes, and
+// - at least from KiCad - not even as one continuous path (each edge gets its
+// own move+draw). We don't need path connectivity to render it though: just
+// collect every individual segment and stroke them all.
+function extractOutline(tree) {
+    let decimalScale = 1000000
+    let unitScale = 1
+    let mode = 'line'
+    let curX = 0, curY = 0
+    const segments = []
+
+    for (const child of tree.children) {
+        if (child.type === 'units') {
+            unitScale = child.units === 'in' ? 25.4 : 1
+        } else if (child.type === 'coordinateFormat') {
+            if (child.format) decimalScale = Math.pow(10, child.format[1])
+        } else if (child.type === 'interpolateMode') {
+            mode = child.mode
+        } else if (child.type === 'graphic' && (child.graphic === 'move' || child.graphic === 'segment')) {
+            const rawX = child.coordinates.x !== undefined ? Number(child.coordinates.x) : undefined
+            const rawY = child.coordinates.y !== undefined ? Number(child.coordinates.y) : undefined
+            const x = rawX !== undefined ? rawX / decimalScale * unitScale : curX
+            const y = rawY !== undefined ? rawY / decimalScale * unitScale : curY
+
+            if (child.graphic === 'segment') {
+                if (mode === 'cwArc' || mode === 'ccwArc') {
+                    const rawI = child.coordinates.i !== undefined ? Number(child.coordinates.i) : 0
+                    const rawJ = child.coordinates.j !== undefined ? Number(child.coordinates.j) : 0
+                    const cx = curX + rawI / decimalScale * unitScale
+                    const cy = curY + rawJ / decimalScale * unitScale
+                    segments.push(...tessellateArc(curX, curY, x, y, cx, cy, mode === 'cwArc'))
+                } else {
+                    segments.push({x1: curX, y1: curY, x2: x, y2: y})
+                }
+            }
+
+            curX = x; curY = y
+        }
+    }
+
+    return segments
+}
+
+// Excellon drill files are used for exactly one thing here: telling a real
+// SMD fiducial mark (never drilled) apart from a through-hole pin/via/mount
+// hole that happens to have no paste either (see findFiducialCandidates()).
+// Excellon's coordinate format is notoriously inconsistent across tools, so
+// this only trusts formats it can identify with confidence - a literal
+// decimal point in a coordinate (self-describing, e.g. modern KiCad's
+// "Decimal format" output) or an explicit ";FILE_FORMAT=I:D" header comment
+// (JLCPCB/EasyEDA). Returns null rather than guess when neither is present,
+// so an unrecognized dialect just falls back to skipping this filter instead
+// of risking wrong hole positions.
+function parseDrillHoles(text) {
+    const isInch = /\bINCH\b/i.test(text) && !/\bMETRIC\b/i.test(text)
+    const hasDecimalPoints = /[XY]-?\d*\.\d+/.test(text)
+
+    let decimalPlaces = null
+    const formatMatch = text.match(/FILE_FORMAT[=,](\d+)[:.](\d+)/i)
+    if (formatMatch) decimalPlaces = Number(formatMatch[2])
+
+    if (!hasDecimalPoints && decimalPlaces === null) return null
+
+    const unitScale = isInch ? 25.4 : 1
+    const holes = []
+    let lastX = 0, lastY = 0
+    const tokenPattern = /([XY])(-?\d+\.?\d*)/g
+
+    for (const line of text.split(/\r?\n/)) {
+        let x = null, y = null, match
+        tokenPattern.lastIndex = 0
+        while ((match = tokenPattern.exec(line))) {
+            const [, axis, raw] = match
+            const value = raw.includes('.') ? Number(raw) * unitScale : Number(raw) / (10 ** decimalPlaces) * unitScale
+            if (axis === 'X') x = value; else y = value
+
+            // A slot ("Gxx" between two coordinate pairs on one line) has two
+            // full pairs on the same line - emit each pair as soon as it's
+            // complete instead of only keeping the last one.
+            if (x !== null && y !== null) {
+                holes.push({x, y})
+                lastX = x; lastY = y
+                x = null; y = null
+            }
+        }
+        // A lone axis token with the other carried over (modal, some dialects
+        // allow omitting an unchanged axis).
+        if (x !== null || y !== null) {
+            holes.push({x: x ?? lastX, y: y ?? lastY})
+            lastX = x ?? lastX; lastY = y ?? lastY
+        }
+    }
+
+    return holes
+}
+
+// A cheap, content-based check for whether a file is an Excellon drill file -
+// filenames for these vary a lot more across fabs (.drl/.xln/.txt/.tap) than
+// gerber layers do, but every dialect starts its header with M48.
+function looksLikeDrillFile(name, text) {
+    return /^\s*M48\b/im.test(text) || /\.(drl|xln)$/i.test(name)
+}
+
+// Drops any point that's part of an evenly-pitched row or column of 3+
+// points - a connector, header, or card-edge finger array, not fiducials
+// (which are always isolated). Used alongside drill-hole exclusion in
+// findFiducialCandidates() to cut down false positives on boards without
+// Gerber X2 metadata to identify fiducials more directly.
+function excludeRepeatingArrayPoints(points, groupTolerance = REPEATING_ARRAY_GROUP_TOLERANCE_MM, gapTolerance = REPEATING_ARRAY_GAP_TOLERANCE_MM) {
+    const excluded = new Set()
+
+    const markEvenRuns = (primaryAxis, secondaryAxis) => {
+        const groups = []
+        for (const point of points) {
+            let group = groups.find(g => Math.abs(g.key - point[primaryAxis]) < groupTolerance)
+            if (!group) {
+                group = {key: point[primaryAxis], members: []}
+                groups.push(group)
+            }
+            group.members.push(point)
+        }
+
+        for (const group of groups) {
+            if (group.members.length < 3) continue
+            const sorted = [...group.members].sort((a, b) => a[secondaryAxis] - b[secondaryAxis])
+            const gaps = sorted.slice(1).map((p, i) => p[secondaryAxis] - sorted[i][secondaryAxis])
+
+            let runStart = 0
+            for (let i = 1; i <= gaps.length; i++) {
+                const stillConsistent = i < gaps.length && Math.abs(gaps[i] - gaps[i - 1]) < gapTolerance
+                if (!stillConsistent) {
+                    if (i - runStart >= 2) for (let j = runStart; j <= i; j++) excluded.add(sorted[j])
+                    runStart = i
+                }
+            }
+        }
+    }
+
+    markEvenRuns('y', 'x')
+    markEvenRuns('x', 'y')
+
+    return points.filter(point => !excluded.has(point))
+}
+
+// Narrows raw "mask opening with no paste" points down to plausible fiducial
+// candidates: drops anything that coincides with a drilled hole (a real SMD
+// fiducial is never drilled) and anything that's part of an evenly-pitched
+// row/column of 3+ (a connector or header footprint, not fiducials). Neither
+// check needs Gerber X2 metadata, so this works the same whether or not the
+// board's export included component attributes.
+export function findFiducialCandidates(maskOnlyPoints, drillHoles) {
+    const notDrilled = drillHoles.length === 0 ? maskOnlyPoints : maskOnlyPoints.filter(point =>
+        !drillHoles.some(hole =>
+            Math.abs(hole.x - point.x) < FIDUCIAL_DRILL_MATCH_TOLERANCE_MM &&
+            Math.abs(hole.y - point.y) < FIDUCIAL_DRILL_MATCH_TOLERANCE_MM
+        )
+    )
+
+    return excludeRepeatingArrayPoints(notDrilled)
+}
+
 // Reads the selected file(s), classifies each one, and returns the paste pad
-// geometry plus raw mask flash points (used to spot fiducial candidates).
+// geometry, raw mask flash points (used to spot fiducial candidates), and the
+// board outline (if an Edge_Cuts/Profile layer was included).
 export async function importGerberSet(fileList) {
     const files = await expandFileSelection(fileList)
     const warnings = []
@@ -306,20 +595,34 @@ export async function importGerberSet(fileList) {
     let pasteSide = null
     let maskFlashes = null
     let maskSide = null
+    let outline = null
+    const drillHoles = []
 
     for (const file of files) {
-        if (/\.(drl|xln|txt|pdf|csv|md|zip)$/i.test(file.name)) continue
+        if (/\.(pdf|csv|md|zip)$/i.test(file.name)) continue
 
-        // A full fab-output zip includes copper/silkscreen/drill/outline layers too,
-        // and those can be large (dense routing, lots of arcs/regions). Fully parsing
-        // every file in the bundle to find the one or two we care about is what was
+        // Drill files aren't gerbers (Excellon, not RS-274X) and can't go
+        // through the parser below - handled separately, only for the
+        // fiducial-candidate filter (see findFiducialCandidates()).
+        if (looksLikeDrillFile(file.name, file.text)) {
+            const holes = parseDrillHoles(file.text)
+            if (holes) drillHoles.push(...holes)
+            continue
+        }
+
+        // Not drill content and not a gerber - e.g. a fab readme.
+        if (/\.txt$/i.test(file.name)) continue
+
+        // A full fab-output zip includes copper/silkscreen/drill layers too, and
+        // those can be large (dense routing, lots of arcs/regions). Fully parsing
+        // every file in the bundle to find the ones we care about is what was
         // freezing the tab on a real multi-layer board. Do a cheap raw-text/filename
         // check first and only run the real (expensive) parser on files that could
-        // plausibly be a paste or mask layer.
+        // plausibly be a paste, mask, or outline layer.
         const looksRelevant =
-            /FileFunction,\s*(Paste|Soldermask)/i.test(file.text) ||
-            /paste|mask/i.test(file.name) ||
-            /\.(gtp|gbp|gts|gbs)$/i.test(file.name)
+            /FileFunction,\s*(Paste|Soldermask|Profile)/i.test(file.text) ||
+            /paste|mask|edge[._-]?cuts?|outline|profile/i.test(file.name) ||
+            /\.(gtp|gbp|gts|gbs|gm1|gko|gml)$/i.test(file.name)
 
         if (!looksRelevant) continue
 
@@ -346,6 +649,8 @@ export async function importGerberSet(fileList) {
         } else if (kind === 'mask' && (maskFlashes === null || (maskSide === 'bottom' && side === 'top'))) {
             maskFlashes = extractPads(tree).map(p => ({x: p.x, y: p.y}))
             maskSide = side
+        } else if (kind === 'outline' && outline === null) {
+            outline = extractOutline(tree)
         }
     }
 
@@ -362,7 +667,9 @@ export async function importGerberSet(fileList) {
         maskFlashes = []
     }
 
-    return {pastePads, maskFlashes, warnings, detected}
+    if (!outline) outline = []
+
+    return {pastePads, maskFlashes, outline, warnings, detected, drillHoles}
 }
 
 function padLength(pad) {
@@ -395,19 +702,41 @@ function classifyPad(pad) {
     return 'point'
 }
 
+// Returns the pad's total (uncapped) area-scaled dispense volume, before it
+// gets split across however many dots the pattern uses. MAX_DISPENSE_DEGREES
+// is a safety/practical ceiling on one dispense ACTION, so it's applied to
+// each dot's own share once the split happens (see planPadDispense), not
+// here - capping the pad's total up front was quietly starving big grid pads
+// split into many dots (a 16mm2 pad's 12 dots were getting 25 degrees each
+// instead of the ~110 the pad's real area calls for, because the 300-degree
+// ceiling was being spent once for the whole pad instead of once per dot).
 function totalDispenseDegreesForPad(pad, baseDispenseDegrees, kind) {
     let raw = baseDispenseDegrees * (pad.area / NOMINAL_0402_PAD_AREA_MM2)
     if (kind === 'line') raw *= ELONGATED_VOLUME_MULTIPLIER
-    return Math.min(MAX_DISPENSE_DEGREES, Math.max(MIN_DISPENSE_DEGREES, raw))
+    return raw
+}
+
+function clampDotDegrees(degrees) {
+    return Math.min(MAX_DISPENSE_DEGREES, Math.max(MIN_DISPENSE_DEGREES, degrees))
 }
 
 // Returns dispense sub-points as {dx, dy, dispenseDegrees} offsets (mm) from
 // the pad center, splitting the pad's total (area-scaled) dispense volume
-// across however many dots the pattern needs.
+// across however many dots the pattern needs - each dot's own share is what
+// gets clamped to [MIN,MAX]_DISPENSE_DEGREES, not the pad's total (see
+// totalDispenseDegreesForPad).
 export function planPadDispense(pad, baseDispenseDegrees, staggerSign = 0) {
-    const kind = classifyPad(pad)
+    let kind = classifyPad(pad)
     const total = totalDispenseDegreesForPad(pad, baseDispenseDegrees, kind)
     const alongX = padLongAxisIsX(pad)
+
+    // A gull-wing IC lead (elongated pad, normally 'line') that's sitting in a
+    // tight-pitch row gets exactly one dot instead of a line of them: with
+    // leads packed this close together, spreading volume along the lead's
+    // length just multiplies how many deposits could bridge to the next lead
+    // over. It keeps the same (elongated-scaled) total volume as a line
+    // pattern would have used, just delivered as a single deposit.
+    if (kind === 'line' && pad.tightPitch) kind = 'point'
 
     let points
 
@@ -423,14 +752,16 @@ export function planPadDispense(pad, baseDispenseDegrees, staggerSign = 0) {
             points.push({
                 dx: alongX ? offset : 0,
                 dy: alongX ? 0 : offset,
-                dispenseDegrees: Math.max(MIN_DISPENSE_DEGREES, total / dotCount)
+                dispenseDegrees: clampDotDegrees(total / dotCount)
             })
         }
     } else if (kind === 'grid') {
-        const usableX = Math.max(pad.xSize - 2 * PAD_EDGE_INSET_MM, 0.1)
-        const usableY = Math.max(pad.ySize - 2 * PAD_EDGE_INSET_MM, 0.1)
-        const cols = Math.max(2, Math.round(usableX / DOT_PITCH_MM) + 1)
-        const rows = Math.max(2, Math.round(usableY / DOT_PITCH_MM) + 1)
+        // Grid dots use a tighter pitch than a line does (GRID_DOT_PITCH_MM <
+        // DOT_PITCH_MM) - see its definition for why.
+        const usableX = Math.max(pad.xSize - 2 * GRID_EDGE_INSET_MM, 0.1)
+        const usableY = Math.max(pad.ySize - 2 * GRID_EDGE_INSET_MM, 0.1)
+        const cols = Math.max(2, Math.round(usableX / GRID_DOT_PITCH_MM) + 1)
+        const rows = Math.max(2, Math.round(usableY / GRID_DOT_PITCH_MM) + 1)
         const stepX = cols > 1 ? usableX / (cols - 1) : 0
         const stepY = rows > 1 ? usableY / (rows - 1) : 0
         const dotCount = cols * rows
@@ -441,23 +772,39 @@ export function planPadDispense(pad, baseDispenseDegrees, staggerSign = 0) {
                 points.push({
                     dx: -usableX / 2 + c * stepX,
                     dy: -usableY / 2 + r * stepY,
-                    dispenseDegrees: Math.max(MIN_DISPENSE_DEGREES, total / dotCount)
+                    dispenseDegrees: clampDotDegrees(total / dotCount)
                 })
             }
         }
     } else {
-        points = [{dx: 0, dy: 0, dispenseDegrees: total}]
+        points = [{dx: 0, dy: 0, dispenseDegrees: clampDotDegrees(total)}]
     }
 
-    if (pad.tightPitch && staggerSign !== 0) {
-        // Nudge the whole pattern (not just a lone dot) perpendicular to the
-        // pad's long axis, alternating direction pad-to-pad, so a row of
+    if (pad.tightPitch && kind === 'point' && staggerSign !== 0) {
+        // Nudge the dot along the pad's own LONG axis, alternating direction
+        // pad-to-pad (staggerSign - see computeAlternatingSigns), so a row of
         // closely spaced IC leads doesn't dispense as one continuous line.
-        const offset = (padWidth(pad) / 2) * STAGGER_OFFSET_FRACTION * staggerSign
+        // Distancing comes straight from the pad's own edge (half its
+        // length) - the long axis gives far more room to separate adjacent
+        // dots than nudging across the pad's (narrow, tight-pitch) width
+        // would.
+        const desiredOffset = (padLength(pad) / 2) * STAGGER_OFFSET_FRACTION
+
+        // But never push the dot far enough that it (or its real dispensed
+        // paste, which can spread wider than the on-screen indicator) could
+        // land past the pad's edge. Sized off TWICE the dot's own drawn
+        // radius - not the radius itself - as a safety margin: the actual
+        // dot stays its normal size, this just keeps clearance to the true
+        // edge generous even if the paste spreads further than expected.
+        const radius = placementDotRadiusMm(points[0].dispenseDegrees)
+        const maxOffset = Math.max(0, padLength(pad) / 2 - 2 * radius)
+
+        const offset = Math.min(desiredOffset, maxOffset) * staggerSign
+
         points = points.map(p => ({
             ...p,
-            dx: p.dx + (alongX ? 0 : offset),
-            dy: p.dy + (alongX ? offset : 0)
+            dx: p.dx + (alongX ? offset : 0),
+            dy: p.dy + (alongX ? 0 : offset)
         }))
     }
 
@@ -491,14 +838,28 @@ export function sortPadsRasterOrder(pads, rowToleranceMm = ROW_TOLERANCE_MM) {
     return result
 }
 
+// Gerber coordinates go through integer-units -> decimal-scale division, which
+// leaves sub-micron floating point noise on otherwise-identical spacings (two
+// pad pairs at the same nominal pitch can come out as e.g. 0.349999999 and
+// 0.350000001mm). Comparing that noisy value straight against gapThreshold
+// made pads with genuinely identical spacing land on opposite sides of the
+// tight-pitch cutoff depending on which way the noise happened to round -
+// exactly the kind of "some pads on this part get treated differently than
+// others" inconsistency this rounding avoids. A micron is far finer than
+// anything the gap threshold logic needs to resolve.
+const GAP_ROUNDING_MM = 0.001
+function roundGap(value) {
+    return Math.round(value / GAP_ROUNDING_MM) * GAP_ROUNDING_MM
+}
+
 function isTightNeighbor(padA, padB, gapThreshold) {
     const halfAX = (padA.xSize ?? padA.diameter ?? 0.3) / 2
     const halfAY = (padA.ySize ?? padA.diameter ?? 0.3) / 2
     const halfBX = (padB.xSize ?? padB.diameter ?? 0.3) / 2
     const halfBY = (padB.ySize ?? padB.diameter ?? 0.3) / 2
 
-    const dxGap = Math.abs(padA.x - padB.x) - (halfAX + halfBX)
-    const dyGap = Math.abs(padA.y - padB.y) - (halfAY + halfBY)
+    const dxGap = roundGap(Math.abs(padA.x - padB.x) - (halfAX + halfBX))
+    const dyGap = roundGap(Math.abs(padA.y - padB.y) - (halfAY + halfBY))
 
     // Close on one axis while roughly aligned on the other = neighbors in a row/column.
     const rowNeighbors = dyGap < 0 && dxGap >= 0 && dxGap < gapThreshold
@@ -509,9 +870,188 @@ function isTightNeighbor(padA, padB, gapThreshold) {
 
 // Flags pads (TSOP/QFP-style fine pitch) whose nearest-neighbor gap is under
 // the threshold, so planPadDispense() can fall back to a single staggered dot.
+// Gated to pads narrower than TIGHT_PITCH_MAX_PAD_WIDTH_MM: isTightNeighbor()
+// only looks at the absolute edge-to-edge gap, with no regard to how wide the
+// pads themselves are, so two large pads that just happen to sit close
+// together (e.g. a power IC's wide drain/source tabs) would otherwise get
+// flagged exactly like a fine-pitch lead row - and for an elongated pad,
+// that flag collapses its normal multi-dot "line" coverage down to a single
+// dot (see planPadDispense), which is wrong for a pad that size.
 export function tagTightPitchPads(pads, gapThreshold = TIGHT_PITCH_GAP_MM) {
     return pads.map((pad, i) => ({
         ...pad,
-        tightPitch: pads.some((other, j) => j !== i && isTightNeighbor(pad, other, gapThreshold))
+        tightPitch: padWidth(pad) <= TIGHT_PITCH_MAX_PAD_WIDTH_MM &&
+            pads.some((other, j) => j !== i && isTightNeighbor(pad, other, gapThreshold))
     }))
+}
+
+// Assigns alternating +1/-1 to tight-pitch pads via proper graph 2-coloring
+// (BFS over the tight-neighbor adjacency graph), not a running toggle that
+// flips while walking pads in whatever order a group happens to list them.
+// A running toggle only alternates correctly along a single straight line -
+// a pad with tight neighbors in two directions at once (a fine-pitch part
+// with pads in two dimensions, not just a single row) has no consistent
+// "next" pad for a linear toggle to follow, so two pads that are genuinely
+// adjacent to each other could end up getting the same sign depending on
+// traversal order. This is independent of group/traversal order entirely
+// (row/column adjacency alone determines the graph), which is also what
+// makes it safe to compute once up front rather than threaded through
+// whatever order components get visited in (see groupPadsByComponent).
+//
+// Used as planPadDispense()'s staggerSign - the perpendicular nudge
+// direction for a tight-pitch pad's single dot.
+//
+// This eliminates the vast majority of same-sign adjacent pairs, but not
+// literally all of them: the adjacency graph is bipartite (safely
+// 2-colorable) for a simple row or grid of same-size pads, but a
+// differently-sized pad that happens to be a tight neighbor of two pads that
+// are themselves tight neighbors forms a triangle - an odd cycle, where one
+// edge is mathematically guaranteed to end up same-signed no matter the
+// coloring. That's a real, rare board layout, not a bug in this function.
+export function computeAlternatingSigns(taggedPads, gapThreshold = TIGHT_PITCH_GAP_MM) {
+    const tightPads = taggedPads.filter(pad => pad.tightPitch)
+    const signs = new Map()
+
+    for (const start of tightPads) {
+        if (signs.has(start)) continue
+        signs.set(start, 1)
+        const queue = [start]
+
+        while (queue.length) {
+            const pad = queue.shift()
+            const sign = signs.get(pad)
+            for (const other of tightPads) {
+                if (other === pad || signs.has(other)) continue
+                if (isTightNeighbor(pad, other, gapThreshold)) {
+                    signs.set(other, -sign)
+                    queue.push(other)
+                }
+            }
+        }
+    }
+
+    return signs
+}
+
+// Buckets a refdes into the coarse categories the Job Positions list groups
+// by, from its standard reference-designator letter prefix (IPC-7351/typical
+// EDA convention: R = resistor, C = capacitor, U = IC). Everything else
+// (connectors, inductors, diodes, transistors, crystals, switches, ...) is
+// "other" rather than guessing at a dozen more one-off prefixes.
+export function classifyComponentType(refdes) {
+    if (!refdes) return 'other'
+    const prefix = /^[A-Za-z_]+/.exec(refdes)?.[0]?.toUpperCase() ?? ''
+    if (prefix === 'R') return 'resistor'
+    if (prefix === 'C') return 'capacitor'
+    if (prefix === 'U') return 'ic'
+    return 'other'
+}
+
+// 'multipad' and 'inferred' are only ever produced by
+// clusterPadsGeometrically() (see groupPadsByComponent) - kept after the
+// real, refdes-confirmed types so those always list first.
+export const COMPONENT_TYPE_ORDER = ['resistor', 'capacitor', 'ic', 'other', 'multipad', 'inferred']
+
+// Splits a refdes into its letter prefix and numeric suffix so "R2" sorts
+// before "R10" (a plain string sort would put "R10" first).
+function compareRefdesNatural(a, b) {
+    const matchA = /^([A-Za-z_]*)(\d*)$/.exec(a)
+    const matchB = /^([A-Za-z_]*)(\d*)$/.exec(b)
+    if (!matchA || !matchB) return a.localeCompare(b)
+
+    const prefixCompare = matchA[1].localeCompare(matchB[1])
+    if (prefixCompare !== 0) return prefixCompare
+
+    if (matchA[2] && matchB[2]) return Number(matchA[2]) - Number(matchB[2])
+    return a.localeCompare(b)
+}
+
+// Union-Find clustering of pads with no refdes into synthetic per-footprint
+// groups, purely from geometry (row/column adjacency, like isTightNeighbor
+// but at COMPONENT_CLUSTER_GAP_MM instead of the much tighter fine-pitch
+// threshold). This is a best-effort reconstruction, not a real designator:
+// without any text/net data there's no way to confirm true footprint
+// boundaries, or tell a resistor from a capacitor (both use identical
+// footprints) - see groupPadsByComponent for how the result gets labeled.
+function clusterPadsGeometrically(pads, gapThreshold = COMPONENT_CLUSTER_GAP_MM) {
+    const parent = pads.map((_, i) => i)
+    const find = i => {
+        while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i] }
+        return i
+    }
+    const union = (i, j) => {
+        const rootI = find(i), rootJ = find(j)
+        if (rootI !== rootJ) parent[rootI] = rootJ
+    }
+
+    for (let i = 0; i < pads.length; i++) {
+        for (let j = i + 1; j < pads.length; j++) {
+            if (isTightNeighbor(pads[i], pads[j], gapThreshold)) union(i, j)
+        }
+    }
+
+    const clusters = new Map()
+    for (let i = 0; i < pads.length; i++) {
+        const root = find(i)
+        if (!clusters.has(root)) clusters.set(root, [])
+        clusters.get(root).push(pads[i])
+    }
+
+    return [...clusters.values()]
+}
+
+// Groups pads by their %TO.C% component (refdes), ordered by component type
+// (COMPONENT_TYPE_ORDER) then naturally by refdes (R1, R2, ... R10) - this is
+// both the Job Positions list's grouping and the actual dispense order for a
+// full run, so pasting proceeds one component at a time instead of a bottom-
+// left-to-top-right raster across unrelated parts. Pads with no component
+// attribute at all (an older/non-X2 gerber export) instead get clustered
+// geometrically (see clusterPadsGeometrically) and labeled generically
+// ("Part 1", "Part 2", ... - a space distinguishes these from a real
+// designator like "R1"), bucketed only by pad count since real part type
+// can't be inferred from geometry alone.
+export function groupPadsByComponent(pads) {
+    const byRefdes = new Map()
+    const loose = []
+
+    for (const pad of pads) {
+        if (!pad.refdes) { loose.push(pad); continue }
+        if (!byRefdes.has(pad.refdes)) byRefdes.set(pad.refdes, [])
+        byRefdes.get(pad.refdes).push(pad)
+    }
+
+    const componentGroups = [...byRefdes.entries()].map(([refdes, groupPads]) => ({
+        refdes,
+        type: classifyComponentType(refdes),
+        pads: groupPads
+    }))
+
+    componentGroups.sort((a, b) =>
+        COMPONENT_TYPE_ORDER.indexOf(a.type) - COMPONENT_TYPE_ORDER.indexOf(b.type) ||
+        compareRefdesNatural(a.refdes, b.refdes)
+    )
+
+    const clusterCentroids = clusterPadsGeometrically(loose).map(clusterPads => ({
+        x: clusterPads.reduce((sum, p) => sum + p.x, 0) / clusterPads.length,
+        y: clusterPads.reduce((sum, p) => sum + p.y, 0) / clusterPads.length,
+        pads: clusterPads
+    }))
+
+    // Every cluster gets a synthetic "Part N" group - bucketed into just two
+    // inferred types: 'multipad' (more than 2 pads - confident enough a
+    // cluster this size is one real component) and 'inferred' (everything
+    // else: 1-2 pad clusters, where geometry alone can't tell a lone/
+    // 2-pad footprint's true boundary as reliably).
+    const looseGroups = []
+    let partNumber = 1
+    for (const cluster of sortPadsRasterOrder(clusterCentroids)) {
+        const clusterPads = sortPadsRasterOrder(cluster.pads)
+        looseGroups.push({
+            refdes: `Part ${partNumber++}`,
+            type: clusterPads.length > 2 ? 'multipad' : 'inferred',
+            pads: clusterPads
+        })
+    }
+
+    return [...componentGroups, ...looseGroups]
 }

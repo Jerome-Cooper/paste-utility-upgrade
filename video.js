@@ -17,25 +17,41 @@ export class VideoManager {
 
     // timer that keeps track of how long we show the cv image
     this.cvDisplayTimer = null;
+
+    // guards the videoTick() requestAnimationFrame loop - without this, a
+    // camera switch (stopVideo then startVideo) leaves the old loop with no
+    // way to know it should stop, and it throws against a now-null
+    // this.video on its next tick instead of exiting cleanly.
+    this.running = false;
   }
 
   async populateCameraList(selectElement) {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoDevices = devices.filter(device => device.kind === 'videoinput');
+
+      // Preserve whatever's currently selected across a refresh - this gets
+      // called again once camera permission is granted (so labels are
+      // actually populated instead of blank), and that shouldn't silently
+      // reset a camera the user already picked/has running.
+      const previousValue = selectElement.value;
+
       selectElement.innerHTML = '';
-      
-      videoDevices.forEach(device => {
+
+      videoDevices.forEach((device, index) => {
         const option = document.createElement('option');
         option.value = device.deviceId;
-        option.text = device.label || `Camera ${videoDevices.indexOf(device) + 1}`;
+        option.text = device.label || `Camera ${index + 1}`;
         selectElement.appendChild(option);
-        
-        // if likely top cam, select it
-        if (device.label && device.label.toLowerCase().includes('top')) {
-          selectElement.value = device.deviceId;
-        }
       });
+
+      if (previousValue && videoDevices.some(device => device.deviceId === previousValue)) {
+        selectElement.value = previousValue;
+      } else {
+        // if likely top cam, select it
+        const topCam = videoDevices.find(device => device.label && device.label.toLowerCase().includes('top'));
+        if (topCam) selectElement.value = topCam.deviceId;
+      }
     } catch (err) {
       console.error('Error populating camera list:', err);
     }
@@ -67,6 +83,7 @@ export class VideoManager {
 
       this.frame = new this.cv.Mat(this.video.videoHeight, this.video.videoWidth, this.cv.CV_8UC4);
 
+      this.running = true;
       this.videoTick();
     
   }
@@ -201,6 +218,8 @@ export class VideoManager {
   // then it kicks off whichever we're doing!  
   videoTick() {
 
+    if (!this.running) return;
+
     if (this.displayCv) {
 
         this.showFrame(this.cvFrame);
@@ -245,21 +264,32 @@ export class VideoManager {
 
   stopVideo(canvas) {
     this.isProcessing = false;
-    
+    this.running = false;
+
     if (this.processTimer) {
       clearTimeout(this.processTimer);
       this.processTimer = null;
     }
-    
+
     if (this.processedFrame) {
       this.processedFrame.delete();
       this.processedFrame = null;
     }
-    
+
+    if (this.frame) {
+      this.frame.delete();
+      this.frame = null;
+    }
+
+    if (this.cvFrame) {
+      this.cvFrame.delete();
+      this.cvFrame = null;
+    }
+
     if (this.video && this.video.srcObject) {
       this.video.srcObject.getTracks().forEach(track => track.stop());
-      this.video.remove(); 
-      this.video = null; 
+      this.video.remove();
+      this.video = null;
     }
 
     if (this.src) {

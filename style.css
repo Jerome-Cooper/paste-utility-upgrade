@@ -313,12 +313,70 @@ label {
   font-family: monospace;
 }
 
+.position-item .dispense-btn {
+  color: #d4a017;
+}
+
 .position-item .remove-btn {
   color: #f44336;
 }
 
 .position-item button:hover {
   background: #f5f5f5;
+}
+
+.position-item.disabled {
+  opacity: 0.45;
+}
+
+.component-type-header,
+.component-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  padding: 6px 8px;
+  border-radius: 4px;
+  margin: 4px 0;
+}
+
+.component-type-header {
+  background-color: #efe4c8;
+  font-weight: 600;
+}
+
+.component-header {
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  margin-left: 16px;
+}
+
+.component-pads {
+  margin-left: 32px;
+}
+
+.group-chevron {
+  display: inline-block;
+  width: 10px;
+  font-size: 11px;
+  color: #666;
+}
+
+.group-label {
+  flex: 1;
+}
+
+.group-count {
+  color: #666;
+  font-size: 0.82em;
+  white-space: nowrap;
+}
+
+.component-type-header .group-enable-toggle,
+.component-header .group-enable-toggle {
+  margin: 0;
+  cursor: pointer;
 }
 
 #capture-controls {
@@ -415,9 +473,15 @@ input[type="range"] {
 #pointViz {
   border:1px solid #000000;
   background-color:white;
-  width:500px;
-  height:500px;
-  align-self: center;
+  width:100%;
+  height:100%;
+  display:block;
+  cursor: grab;
+  touch-action: none;
+}
+
+#pointViz:active {
+  cursor: grabbing;
 }
 
 #secondRow {
@@ -983,21 +1047,21 @@ select:focus {
   justify-content: center;
 }
 
-#left-air-toggle, #left-vac, #disable-steppers,
+#left-air-toggle, #right-air-toggle, #left-vac, #right-vac, #disable-steppers,
 #ring-lights-toggle, #home-x, #home-y, #home-z, #disconnect {
   background-color: #6c757d;
 }
 
-#left-air-toggle:hover, #left-vac:hover, #disable-steppers:hover,
+#left-air-toggle:hover, #right-air-toggle:hover, #left-vac:hover, #right-vac:hover, #disable-steppers:hover,
 #ring-lights-toggle:hover, #home-x:hover, #home-y:hover, #home-z:hover, #disconnect:hover {
   background-color: #5a6268;
 }
 
-#left-air-toggle.active, #ring-lights-toggle.active {
+#left-air-toggle.active, #right-air-toggle.active, #ring-lights-toggle.active {
   background-color: #2e7d32;
 }
 
-#left-air-toggle.active:hover, #ring-lights-toggle.active:hover {
+#left-air-toggle.active:hover, #right-air-toggle.active:hover, #ring-lights-toggle.active:hover {
   background-color: #256428;
 }
 
@@ -1221,7 +1285,40 @@ select:focus {
   border: 1px solid var(--accent-color);
   border-radius: 8px;
   display:flex;
-  justify-content: space-around;
+  justify-content: center;
+}
+
+.gerber-visualization-container {
+  position: relative;
+  width: 100%;
+  /* Scales with the browser window's height rather than being forced to a
+     fixed 1:1 aspect ratio - drawJobToCanvas() already fits the board into
+     whatever rectangle it's given. */
+  height: 60vh;
+  min-height: 320px;
+  max-height: 900px;
+}
+
+.gerber-visualization-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+  z-index: 1;
+}
+
+.gerber-visualization-controls button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  line-height: 1;
+  font-size: 16px;
+}
+
+.gerber-visualization-controls button.active {
+  background-color: var(--button-hover);
+  box-shadow: inset 0 0 0 2px #000;
 }
 
 .export-section {
